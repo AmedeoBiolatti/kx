@@ -1,0 +1,1519 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kx dashboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f6f6f3; --surface: #ffffff; --raised: #ffffff; --sunken: #f3f3f0;
+  --ink: #111110; --ink-2: #52514e; --muted: #8a8983;
+  --grid: #ebeae5; --axis: #c9c8c0; --ring: rgba(17,17,16,0.09); --border: #e6e5df;
+  --accent: #2a78d6; --accent-ink: #1d5fae; --accent-soft: rgba(42,120,214,0.10);
+  --series-1: #2a78d6; --series-2: #e0702a; --series-3: #2f9e6d; --series-4: #8b5cf6; --series-5: #d1495b; --series-6: #b08900; --series-7: #0e8f9a; --series-8: #c2569b; --context: #bdbcb5;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-ink: #0b6b0b; --warn-ink: #8a5a00; --crit-ink: #a52a2a;
+  --good-soft: rgba(12,163,12,0.10); --warn-soft: rgba(250,178,25,0.16); --crit-soft: rgba(208,59,59,0.10);
+  --wash: rgba(42,120,214,0.06); --chip: #f0efeb;
+  --shadow: 0 1px 2px rgba(17,17,16,0.04), 0 1px 1px rgba(17,17,16,0.03);
+  --shadow-lg: 0 12px 32px rgba(17,17,16,0.14);
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0f0f0e; --surface: #181817; --raised: #20201e; --sunken: #141413;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8a8983;
+    --grid: #2a2a28; --axis: #3a3a37; --ring: rgba(255,255,255,0.09); --border: #2a2a28;
+    --accent: #3987e5; --accent-ink: #7fb2ef; --accent-soft: rgba(57,135,229,0.16);
+    --series-1: #3987e5; --series-2: #f08a46; --series-3: #3fb883; --series-4: #a07cf8; --series-5: #e8697a; --series-6: #d4ad2c; --series-7: #2bb3bf; --series-8: #e07cbd; --context: #5a5955;
+    --good-ink: #3ccf3c; --warn-ink: #f5c04a; --crit-ink: #f07a7a;
+    --good-soft: rgba(12,163,12,0.18); --warn-soft: rgba(250,178,25,0.16); --crit-soft: rgba(208,59,59,0.20);
+    --wash: rgba(57,135,229,0.10); --chip: #262624;
+    --shadow: none; --shadow-lg: 0 12px 32px rgba(0,0,0,0.5);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0f0f0e; --surface: #181817; --raised: #20201e; --sunken: #141413;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #8a8983;
+  --grid: #2a2a28; --axis: #3a3a37; --ring: rgba(255,255,255,0.09); --border: #2a2a28;
+  --accent: #3987e5; --accent-ink: #7fb2ef; --accent-soft: rgba(57,135,229,0.16);
+  --series-1: #3987e5; --series-2: #f08a46; --series-3: #3fb883; --series-4: #a07cf8; --series-5: #e8697a; --series-6: #d4ad2c; --series-7: #2bb3bf; --series-8: #e07cbd; --context: #5a5955;
+  --good-ink: #3ccf3c; --warn-ink: #f5c04a; --crit-ink: #f07a7a;
+  --good-soft: rgba(12,163,12,0.18); --warn-soft: rgba(250,178,25,0.16); --crit-soft: rgba(208,59,59,0.20);
+  --wash: rgba(57,135,229,0.10); --chip: #262624;
+  --shadow: none; --shadow-lg: 0 12px 32px rgba(0,0,0,0.5);
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Inter, sans-serif; -webkit-font-smoothing: antialiased; }
+select, input, button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* header */
+header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--border); }
+.bar { display: flex; align-items: center; gap: 12px; padding: 0 24px; height: 48px; max-width: 1440px; margin: 0 auto; }
+.brand { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--ink); color: var(--page); font: 700 13px/1 var(--mono); letter-spacing: -.02em; flex: none; }
+.comp { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.comp .sub { max-width: 100%; }
+.comp select { field-sizing: content; min-width: 80px; appearance: none; -webkit-appearance: none; border: 0; background: transparent; padding: 0 18px 0 0; font-weight: 650; font-size: 14px; max-width: 320px; text-overflow: ellipsis; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 7px) 55%, calc(100% - 3px) 55%; background-size: 4px 4px; background-repeat: no-repeat; }
+select option { background: var(--raised); color: var(--ink); }  /* the open list: a transparent select would show it white */
+.comp .sub { color: var(--muted); font-size: 11px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spacer { flex: 1; }
+.meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+a.ext { color: var(--accent-ink); text-decoration: none; white-space: nowrap; }
+a.ext:hover { text-decoration: underline; }
+a.ext:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 3px; }
+.kmenu { position: relative; font-size: 12.5px; }
+.kmenu summary { list-style: none; cursor: pointer; color: var(--accent-ink); padding: 4px 8px; border-radius: 7px; white-space: nowrap; user-select: none; }
+.kmenu summary::-webkit-details-marker { display: none; }
+.kmenu summary:hover, .kmenu[open] summary { background: var(--wash); }
+.kmenu summary:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.kmenu .menu { position: absolute; right: 0; top: calc(100% + 4px); background: var(--raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; display: flex; flex-direction: column; min-width: 190px; z-index: 20; }
+.kmenu .menu a.ext { padding: 6px 10px; border-radius: 6px; color: var(--ink); }
+.kmenu .menu a.ext:hover { background: var(--wash); text-decoration: none; }
+.kmenu .menu .sep { height: 1px; background: var(--border); margin: 4px 6px; }
+td.nowrap { white-space: nowrap; }
+.h2sub a.ext { font-size: inherit; }
+.label a.ext { color: inherit; }
+.label a.ext:hover { color: var(--accent-ink); }
+.icon-btn { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; color: var(--ink-2); }
+.icon-btn:hover { background: var(--wash); color: var(--ink); }
+.icon-btn svg { width: 15px; height: 15px; }
+nav { display: flex; gap: 2px; align-self: stretch; margin-left: 16px; overflow-x: auto; }
+nav button { position: relative; background: none; border: 0; padding: 0 10px; cursor: pointer; color: var(--ink-2); font-weight: 500; white-space: nowrap; border-radius: 6px 6px 0 0; }
+nav button:hover { color: var(--ink); }
+nav button[aria-selected=true] { color: var(--ink); font-weight: 600; }
+nav button[aria-selected=true]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; border-radius: 2px; background: var(--ink); }
+nav .count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 6px; border-radius: 9px; background: var(--warn-soft); color: var(--warn-ink); font-size: 11px; font-weight: 650; text-align: center; }
+
+/* layout */
+main { max-width: 1440px; margin: 0 auto; padding: 14px 24px 48px; }
+h2 { font-size: 12.5px; color: var(--ink); margin: 18px 0 6px; font-weight: 650; letter-spacing: .005em; display: flex; align-items: baseline; gap: 8px; }
+h2 .h2sub { color: var(--muted); font-weight: 400; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+h2:first-child { margin-top: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); }
+.card.flush { padding: 2px 4px; }
+.grid { display: grid; gap: 16px; }
+.tiles { grid-template-columns: 1.4fr repeat(3, 1fr); }
+.cols { grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); align-items: start; }
+.cols > div > h2:first-child { margin-top: 18px; }
+.stack > * + * { margin-top: 0; }
+@media (max-width: 1000px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cols { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { header { padding-bottom: 0; } .bar { flex-wrap: wrap; height: auto; padding: 8px 14px 0; } nav { order: 5; width: 100%; margin-left: -10px; height: 38px; } .meta { display: none; } .kmenu { order: 4; } .kmenu .menu { left: 0; right: auto; } }
+@media (max-width: 640px) { .card.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .card.stats .stat:nth-child(3) { border-left: 0; } .card.stats .stat:nth-child(n+3) { border-top: 1px solid var(--grid); } .need { grid-template-columns: 20px 1fr; } .need .actions { grid-column: 2; justify-content: flex-start; } .bar { padding: 10px 16px 0; } nav { padding: 6px 10px 0; } main { padding: 18px 16px 56px; } }
+
+/* stat strip */
+.stats { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; margin-top: 10px; padding: 0; }
+.stat { padding: 10px 16px; min-width: 0; }
+.stat + .stat { border-left: 1px solid var(--grid); }
+.stat .label { color: var(--muted); font-size: 11.5px; }
+.stat .value { font-size: 22px; font-weight: 650; letter-spacing: -.02em; line-height: 1.2; margin-top: 2px; white-space: nowrap; }
+.stat .value small { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+.stat .sub { color: var(--muted); font-size: 11.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat.hero .value { font-size: 26px; color: var(--accent-ink); }
+/* tiles */
+.tile { display: flex; flex-direction: column; }
+.tile .label { color: var(--ink-2); font-size: 12px; font-weight: 500; }
+.tile .value { font-size: 22px; font-weight: 650; margin-top: 6px; letter-spacing: -.02em; line-height: 1.1; }
+.tile .value small { font-size: 14px; font-weight: 500; color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+.tile .sub { color: var(--muted); font-size: 12px; margin-top: auto; padding-top: 8px; overflow-wrap: anywhere; }
+.tile.hero { background: linear-gradient(160deg, var(--accent-soft), transparent 70%), var(--surface); }
+.tile.hero .value { font-size: 40px; }
+
+/* tables */
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 5px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+td.nowrap { white-space: nowrap; }
+.id { font-family: var(--mono); font-size: 12px; white-space: nowrap; color: var(--ink); }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--wash); }
+tr.click:hover td:first-child { border-radius: 8px 0 0 8px; }
+tr.click:hover td:last-child { border-radius: 0 8px 8px 0; }
+.rank { color: var(--muted); }
+.dim { color: var(--muted); }
+.sec { color: var(--ink-2); }
+.wrap { overflow-wrap: anywhere; }
+.task-ttl { display: block; min-width: min(36ch, 45vw); }
+td.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 0; width: 100%; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* pills */
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--chip); font-size: 11.5px; font-weight: 500; color: var(--ink-2); white-space: nowrap; line-height: 1.7; }
+.status { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; border-radius: 999px; font-size: 11.5px; font-weight: 550; white-space: nowrap; background: var(--chip); color: var(--ink-2); line-height: 1.7; }
+.status i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; background: currentColor; }
+.status.good { background: var(--good-soft); color: var(--good-ink); }
+.status.warning { background: var(--warn-soft); color: var(--warn-ink); }
+.status.serious { background: var(--warn-soft); color: var(--warn-ink); }
+.status.critical { background: var(--crit-soft); color: var(--crit-ink); }
+.status.active { background: var(--accent-soft); color: var(--accent-ink); }
+.status.active i { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.verdict { white-space: nowrap; }
+.verdict small { color: var(--muted); margin-left: 4px; font-size: 11px; }
+
+/* needs you */
+.needs { border-left: 3px solid var(--warning); }
+.needs.clear { border-left-color: var(--good); display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: var(--ink-2); }
+.need { display: grid; grid-template-columns: 20px 1fr auto; gap: 2px 10px; padding: 7px 0; align-items: center; border-bottom: 1px solid var(--grid); align-items: start; }
+.need:first-child { padding-top: 2px; }
+.need:last-child { border-bottom: 0; padding-bottom: 2px; }
+.need .icon { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.need .what { font-weight: 500; }
+.need code, .cmd { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+.need code { display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 5px; background: var(--sunken); border: 1px solid var(--border); }
+.need .actions, .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.ok-dot { width: 18px; height: 18px; border-radius: 5px; font-size: 11px; display: grid; place-items: center; background: var(--good-soft); color: var(--good-ink); font-weight: 700; }
+
+/* controls */
+.btn { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 3px 10px; cursor: pointer; font-weight: 500; box-shadow: var(--shadow); }
+.btn:hover { background: var(--wash); }
+.btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.small { padding: 1px 8px; font-size: 12px; font-family: var(--mono); }
+select, input[type=search] { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 3px 8px; box-shadow: var(--shadow); }
+input[type=search] { min-width: 240px; }
+.filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+.filters label { display: inline-flex; gap: 6px; align-items: center; color: var(--ink-2); }
+.seg { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--chip); }
+.seg button { border: 0; background: none; padding: 4px 12px; border-radius: 7px; cursor: pointer; color: var(--ink-2); font-weight: 500; }
+.seg button[aria-pressed=true] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+/* task graph: dependencies left to right */
+.tg-wrap { overflow-x: auto; padding: 4px 2px; }
+.tg { position: relative; margin: 0 auto; }
+.tg svg { position: absolute; inset: 0; pointer-events: none; }
+.tg-node { position: absolute; display: flex; flex-direction: column; gap: 4px; text-align: left; font: inherit; color: inherit; background: var(--raised); border: 1px solid var(--border); border-left: 3px solid var(--kc, var(--axis)); border-radius: 8px; padding: 6px 9px; cursor: pointer; }
+.tg-node:hover, .tg-node:focus-visible { border-color: var(--accent); border-left-color: var(--kc, var(--axis)); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.tg-node .t { font-size: 12.5px; font-weight: 500; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tg-node .m { display: flex; align-items: center; gap: 6px; margin-top: auto; font-size: 11.5px; min-width: 0; }
+.tg-node .m .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tg-node.dropped { opacity: .6; }
+
+/* misc */
+.empty { color: var(--muted); padding: 10px 2px; }
+.progress { height: 6px; background: var(--chip); border-radius: 3px; overflow: hidden; min-width: 80px; }
+.progress > div { height: 100%; background: var(--series-1); border-radius: 3px; }
+.meter + .meter { margin-top: 9px; }
+.meter .row { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; font-size: 12px; }
+.meter .name { font-weight: 500; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 var(--mono); background: var(--sunken); border: 1px solid var(--border); padding: 10px 12px; border-radius: 8px; margin: 6px 0; max-height: 360px; overflow: auto; }
+.note { padding: 7px 0; border-bottom: 1px solid var(--grid); }
+.note:last-child { border-bottom: 0; }
+.note .when { color: var(--muted); font-size: 12px; margin-bottom: 2px; }
+.finding { padding: 9px 2px; border-bottom: 1px solid var(--grid); }
+.finding:last-child { border-bottom: 0; }
+.finding > .wrap { max-width: 100ch; }
+.finding .head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.error-box { color: var(--crit-ink); }
+.err-banner { background: var(--crit-soft); border: 1px solid var(--border); border-left: 3px solid var(--critical); padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
+.stale { opacity: .6; transition: opacity .2s; }
+
+/* drawer */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.18); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 9; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(780px, 100vw); background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow-lg); overflow-y: auto; padding: 0 26px 48px; z-index: 10; transform: translateX(105%); transition: transform .2s ease; }
+.drawer.open { transform: none; }
+.drawer.wide { width: min(1680px, 96vw); }
+.drawer.wide .sec, .drawer.wide .note, .drawer.wide dl.kv, .drawer.wide pre { max-width: 130ch; }
+.drawer .dhead { position: sticky; top: 0; z-index: 2; display: flex; justify-content: flex-end; padding: 14px 0 6px; background: linear-gradient(var(--surface) 70%, transparent); }
+.drawer h3 { margin: 0 0 6px; font-size: 19px; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.drawer h2 { margin-top: 26px; }
+
+/* charts */
+.legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin: 0 0 8px; flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key-line { width: 16px; height: 2px; border-radius: 1px; display: inline-block; }
+.key-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.key-line.dotted { height: 0; background: none !important; border-top: 2px dotted; }
+.chart { position: relative; }
+.chart svg { display: block; overflow: visible; }
+.tip { position: absolute; pointer-events: none; background: var(--raised); border: 1px solid var(--border); border-radius: 10px; padding: 8px 11px; font-size: 12px; box-shadow: var(--shadow-lg); min-width: 140px; max-width: 320px; z-index: 3; }
+.tip .v { font-weight: 650; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tip .row { display: flex; align-items: center; gap: 8px; }
+.tip .t { color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
+.pick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; }
+.pick .chip { cursor: pointer; border: 1px solid transparent; font-family: var(--mono); }
+.pick .chip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
+.pick .chip:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.pick .chip[hidden] { display: none; }
+.multiples { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.multiples > * { min-width: 0; }
+.run-stats { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); margin: 4px 0 6px; }
+.run-stats .stat { border-top: 0; }
+.run-stats .progress { margin-top: 7px; height: 5px; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.curves-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 12px; }
+.curves-bar .seg button { padding: 3px 10px; font-size: 12px; }
+.curves { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }  /* few charts: they share the width */
+.curves-bar input[type=search] { min-width: 0; width: 240px; }
+.curves-bar .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+.curves > .card { min-width: 0; padding: 10px 12px 4px; }
+.curves > .card.wide { grid-column: 1 / -1; }
+.curve-head { display: flex; align-items: baseline; gap: 8px; }
+.curve-head .name { font-family: var(--mono); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.curve-head .last { margin-left: auto; font-size: 17px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+.curve-head .icon-btn { width: 24px; height: 24px; font-size: 13px; }
+.curve-sub { color: var(--muted); font-size: 11.5px; margin: 1px 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rprog { display: flex; align-items: center; gap: 6px; }
+.rprog .progress { min-width: 54px; width: 54px; height: 4px; }
+details.run-details > summary { cursor: pointer; color: var(--ink-2); font-weight: 600; margin-top: 26px; }
+.multiples .ttl { font-size: 12px; color: var(--ink-2); margin-bottom: 2px; font-family: var(--mono); }
+th.sel, td.sel { width: 1%; padding-right: 0; }
+.pickcell { display: block; padding: 1px 2px; cursor: pointer; }
+.pickcell input { margin: 0; cursor: pointer; vertical-align: -2px; accent-color: var(--accent); }
+.cmp-bar { display: inline-flex; gap: 8px; align-items: center; }
+.swatch { width: 14px; height: 14px; border-radius: 4px; border: 2px solid var(--c); background: var(--c); cursor: pointer; padding: 0; display: inline-block; vertical-align: -2px; }
+.swatch[aria-pressed="false"] { background: transparent; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--c); flex: none; }
+.cmp-vals { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 11.5px; margin: 1px 0 4px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.cmp-vals span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cmp-vals b { font-weight: 600; color: var(--ink); }
+.suggest { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 10px 0 0; font-size: 12px; }
+.suggest .chip { cursor: pointer; border: 1px solid var(--border); font-family: var(--mono); }
+.suggest .chip:hover { background: var(--wash); border-color: var(--accent); }
+.suggest input[type=search] { min-width: 0; width: 160px; font-size: 12px; }
+.chg { background: var(--accent-soft); color: var(--accent-ink); border-radius: 3px; box-shadow: 0 0 0 2px var(--accent-soft); }
+.delta { display: block; font-size: 11px; color: var(--muted); }
+.cmp-table td { white-space: nowrap; }
+.cmp-table td:first-child { white-space: normal; overflow-wrap: anywhere; min-width: 16ch; }
+.cmp-table td.cfg { white-space: normal; overflow-wrap: anywhere; max-width: 40ch; }
+/* training: runs on the left, the shown ones' curves on the right */
+main.wide { max-width: none; }
+.ws { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; align-items: start; }
+.ws-side { position: sticky; top: 60px; max-height: calc(100vh - 72px); overflow-y: auto; padding: 0; }
+.ws-head { position: sticky; top: 0; z-index: 1; background: var(--surface); padding: 10px 12px 8px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+.ws-head input[type=search] { width: 100%; }
+.ws-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.ws-filters .seg button { padding: 2px 9px; font-size: 12px; }
+.ws-check { font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.ws-group { display: flex; justify-content: space-between; padding: 10px 12px 4px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.ws-run { display: flex; gap: 9px; align-items: flex-start; padding: 7px 12px; border-top: 1px solid var(--grid); cursor: pointer; }
+.ws-run[hidden] { display: none; }
+.ws-run:hover { background: var(--wash); }
+.ws-run.on { cursor: default; background: color-mix(in srgb, var(--wash) 60%, transparent); }
+.ws-run.full { cursor: default; }
+.ws-run .swatch { margin-top: 2px; flex: none; }
+.ws-add { flex: none; width: 16px; height: 16px; margin-top: 2px; padding: 0; border: 1.5px solid var(--axis); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; line-height: 12px; cursor: pointer; }
+.ws-run:hover .ws-add:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.ws-add:disabled { opacity: .4; cursor: default; }
+.ws-body { min-width: 0; flex: 1; }
+.ws-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ws-id { font: 600 12.5px var(--mono); background: none; border: 0; padding: 0; cursor: pointer; color: var(--ink); }
+.ws-id:hover { color: var(--accent-ink); text-decoration: underline; }
+.ws-score { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.ws-meta { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+.ws-hyp { font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-acts { display: flex; gap: 2px; align-items: center; flex: none; }
+.ws-mk { font-size: 11px; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 6px; padding: 0 5px; cursor: pointer; visibility: hidden; }
+.ws-run:hover .ws-mk, .ws-mk:focus-visible { visibility: visible; }
+.ws-mk:hover { color: var(--accent-ink); border-color: var(--border); }
+.ws-foot { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--grid); font-size: 12px; }
+.ws-foot input { min-width: 0; width: 130px; font-size: 12px; }
+.ws-main { min-width: 0; }
+.ws-main > .curves-bar:first-child, .ws-main h2:first-child { margin-top: 0; }
+.ws-sec > summary { cursor: pointer; font-weight: 600; margin: 12px 0 8px; display: flex; align-items: center; gap: 8px; }
+@media (max-width: 900px) { .ws { grid-template-columns: minmax(0, 1fr); } .ws-side { position: static; max-height: 380px; } }
+.icon-btn.mini { width: 22px; height: 22px; font-size: 12px; border-radius: 6px; }
+details.table-view summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 6px; width: max-content; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <span class="brand" aria-hidden="true">kx</span>
+    <div class="comp"><select id="comp" aria-label="Competition"></select><span class="sub" id="compsub"></span></div>
+    <nav role="tablist" id="tabs"></nav>
+    <span class="spacer"></span>
+    <details class="kmenu" id="kmenu"><summary aria-label="Kaggle pages">Kaggle ▾</summary><div class="menu" id="klinks"></div></details>
+    <span class="meta" id="updated"></span>
+    <button class="icon-btn" id="refresh" title="Refresh now" aria-label="Refresh now"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg></button>
+    <button class="icon-btn" id="theme" title="Switch light / dark" aria-label="Switch light or dark theme"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor"/></svg></button>
+  </div>
+</header>
+<main id="main"></main>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+<script>
+"use strict";
+const TOKEN = "__KX_TOKEN__";
+let COMP = new URLSearchParams(location.search).get("comp") || "__KX_DEFAULT__";
+const TABS = [["status", "Status"], ["training", "Training"], ["runs", "Runs"], ["tasks", "Tasks"], ["findings", "Findings"], ["subs", "Submissions"]];
+let TAB = (location.hash.slice(1).split("/")[0]) || "status";
+const state = { compare: [], runsQuery: "", runsProtocol: "", runsMode: "board", tasksAll: false, tasksMode: "list", findAll: false, findTag: "", lbProtocol: "", histProtocol: "", metricQuery: "" };
+
+// -- tiny DOM helpers (text always via textContent) -----------------------------------------------------------
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "style") el.setAttribute("style", v);
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return el;
+}
+const svgNS = "http://www.w3.org/2000/svg";
+function s(tag, attrs) { const el = document.createElementNS(svgNS, tag); for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v); return el; }
+function api(path, opts) {
+  const sep = path.includes("?") ? "&" : "?";
+  return fetch(`/api/${path}${sep}comp=${encodeURIComponent(COMP)}`, opts).then(async r => {
+    const d = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+    if (!r.ok || (d && d.ok === false)) throw Object.assign(new Error(d.error || `HTTP ${r.status}`), { fix: d.fix });
+    return d;
+  });
+}
+function fmt(v, d = 4) { if (v == null) return "–"; if (typeof v !== "number") return String(v); const a = Math.abs(v); if (a >= 1e5) return v.toLocaleString(undefined, { maximumFractionDigits: 0 }); return Number(v.toPrecision(d)).toString(); }
+function score(v, se) { return v == null ? "–" : fmt(v) + (se != null ? ` ±${fmt(se, 2)}` : ""); }
+function ago(ts) { if (!ts) return "–"; const s = (Date.now() - new Date(ts).getTime()) / 1000; return dur(s); }
+function dur(s) { if (s == null) return "–"; s = Math.max(0, s); if (s < 60) return `${s | 0}s`; if (s < 3600) return `${(s / 60) | 0}m`; if (s < 86400) return `${(s / 3600) | 0}h${String(((s % 3600) / 60) | 0).padStart(2, "0")}`; return `${(s / 86400) | 0}d${((s % 86400) / 3600) | 0}h`; }
+function compact(v) { const a = Math.abs(v); if (a >= 1e9) return (v / 1e9).toFixed(1) + "B"; if (a >= 1e6) return (v / 1e6).toFixed(1) + "M"; if (a >= 1e4) return (v / 1e3).toFixed(0) + "K"; return fmt(v, 3); }
+function rid(n) { return "r" + String(n).padStart(4, "0"); }
+
+const RUN_KIND = { done: "good", failed: "critical", running: "active" };
+const TASK_KIND = { active: "active", waiting: "warning", open: "neutral", done: "good", dropped: "neutral" };
+const SUB_KIND = { complete: "good", error: "critical", pending: "warning", submitted: "warning", inflight: "warning", unknown: "serious" };
+let COMPS = [];
+function L() { const c = COMPS.find(x => x.slug === COMP); return (c && c.links) || {}; }
+function ext(url, label, title) { return url ? h("a", { class: "ext", href: url, target: "_blank", rel: "noopener noreferrer", title: title || url }, label, " ↗") : null; }
+function kernelUrl(target) { return target && target.startsWith("kernel:") ? `https://www.kaggle.com/code/${target.slice(7).split("@")[0]}` : null; }
+function badge(text, kind) { return h("span", { class: `status ${kind || "neutral"}` }, h("i"), text || "–"); }
+function verdict(vs) {
+  if (!vs) return h("span", { class: "status active verdict" }, "best");
+  const kind = { better: "good", worse: "critical", "within noise": "neutral", inconsistent: "warning" }[vs.verdict] || "neutral";
+  return h("span", { class: "verdict" }, h("span", { class: `status ${kind}` }, vs.verdict), vs.z != null ? h("small", {}, `z ${vs.z.toFixed(1)}`) : null);
+}
+function table(headers, rows, onclick) {
+  const t = h("table", {}, h("thead", {}, h("tr", {}, headers.map(([label, cls]) => h("th", { class: cls || "" }, label)))));
+  const tb = h("tbody");
+  rows.forEach((r, i) => tb.append(h("tr", { class: onclick ? "click" : "", onclick: onclick ? () => onclick(i) : null, tabindex: onclick ? "0" : null,
+    onkeydown: onclick ? (e => { if (e.key === "Enter") onclick(i); }) : null }, r.map((c, j) => h("td", { class: headers[j][1] || "" }, c)))));
+  t.append(tb);
+  return t;
+}
+
+// -- line chart: crosshair + tooltip, hairline grid, one y-axis, table view ------------------------------------
+// min/max of data arrays without Math.min(...a): spreading a long run's points overflows the call stack
+function lo(a) { let m = Infinity; for (const v of a) if (v < m) m = v; return m; }
+function hi(a) { let m = -Infinity; for (const v of a) if (v > m) m = v; return m; }
+function niceTicks(lo, hi, n = 4) {
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const step0 = (hi - lo) / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(st => st >= step0) || step0;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toPrecision(10));
+  return out;
+}
+function dayTicks(x0, x1, n) { const step = Math.max(1, Math.ceil((x1 - x0) / n)); const out = []; for (let v = Math.ceil(x0); v <= x1 + 1e-9; v += step) out.push(v); return out; }
+function day(ts) { return new Date(ts).getTime() / 86400000; }
+function dayFmt(d) { return new Date(d * 86400000).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+function seriesKey(sr) { return sr.kind === "dots" ? h("i", { class: "key-dot", style: `background:${sr.color}` }) : h("i", { class: sr.dotted ? "key-line dotted" : "key-line", style: sr.dotted ? `border-color:${sr.color}` : `background:${sr.color}` }); }
+function nearestPoint(points, x) {  // within the series' own range only: a run that ended earlier has no value later
+  let best = null, lo = Infinity, hi = -Infinity;
+  for (const p of points) { lo = Math.min(lo, p[0]); hi = Math.max(hi, p[0]); if (!best || Math.abs(p[0] - x) < Math.abs(best[0] - x)) best = p; }
+  return x < lo || x > hi ? null : best;
+}
+function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", title = "", tipTitle, refs = [], invertY = false, xTicks = null, yTickFmt = compact, xPad = 1, legend = true, nearest = false }) {
+  const wrap = h("div", { class: "chart" });
+  const all = series.flatMap(sr => sr.points);
+  if (!all.length) { wrap.append(h("div", { class: "empty" }, "no data")); return wrap; }
+  const shown = series.filter(sr => !sr.aside);  // aside: context drawn faintly, kept out of legend, tooltip and table
+  const keyed = shown.filter(sr => sr.kind !== "band");  // a band shares its line's key
+  if (legend && keyed.length > 1) wrap.append(h("div", { class: "legend" }, keyed.map(sr => h("span", {}, seriesKey(sr), sr.name))));
+  const yv = p => p.length > 2 ? `${yFmt(Math.min(p[1], p[2]))}–${yFmt(Math.max(p[1], p[2]))}` : yFmt(p[1]);
+  const xs = all.map(p => p[0]), ys = [...all.flatMap(p => p.length > 2 ? [p[1], p[2]] : [p[1]]), ...refs.map(r => r.y)];
+  const uniq = [...new Set(shown.flatMap(sr => sr.points).map(p => p[0]))].sort((a, b) => a - b);
+  const plot = h("div", { style: `position:relative;min-height:${height}px` });  // its height before it is drawn (next frame): a refresh does not move the page
+  wrap.append(plot);
+  let lastW = 0;
+  const ro = new ResizeObserver(entries => { const w = Math.round(entries[0].contentRect.width); if (w && w !== lastW) { lastW = w; requestAnimationFrame(() => draw(w)); } });  // next frame: drawing changes the layout
+  ro.observe(plot);
+  function draw(W) {
+  plot.replaceChildren();
+  const H = height, m = { l: 52, r: 16, t: 10, b: 28 };
+  let x0 = lo(xs), x1 = hi(xs); if (x0 === x1) { x0 -= xPad; x1 += xPad; }
+  let ylo = lo(ys), yhi = hi(ys);
+  if (ylo === yhi) { const pad = Math.abs(ylo) * 0.1 || 1; ylo -= pad; yhi += pad; }  // one value: a range around it
+  const yt = niceTicks(ylo, yhi);
+  if (yt.length > 1) { const st = yt[1] - yt[0]; if (yt[yt.length - 1] < yhi) yt.push(+(yt[yt.length - 1] + st).toPrecision(10)); if (yt[0] > ylo) yt.unshift(+(yt[0] - st).toPrecision(10)); }  // a labelled tick past each end
+  const y0 = Math.min(yt[0], ylo), y1 = Math.max(yt[yt.length - 1], yhi);
+  const X = v => m.l + (v - x0) / (x1 - x0) * (W - m.l - m.r);
+  const Y = v => invertY ? m.t + (v - y0) / ((y1 - y0) || 1) * (H - m.t - m.b) : H - m.b - (v - y0) / ((y1 - y0) || 1) * (H - m.t - m.b);
+  const svg = s("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": title || series.map(x => x.name).join(", ") });
+  let prevLabel = null;
+  for (const v of yt) {
+    const label = yTickFmt(v);
+    if (label === prevLabel) continue;  // ticks finer than the format can show
+    prevLabel = label;
+    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)", "stroke-width": 1 }));
+    const tx = s("text", { x: m.l - 8, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }); tx.textContent = label; svg.append(tx);
+  }
+  svg.append(s("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)", "stroke-width": 1 }));
+  const xt = (xTicks || niceTicks)(x0, x1, Math.max(3, Math.min(6, Math.floor(W / 110)))).filter(v => v >= x0 && v <= x1 && !(xLabel && X(v) > W - m.r - 34));
+  const lastY = { right: -1e9, left: -1e9 };
+  for (const r of [...refs].sort((a, b) => Y(a.y) - Y(b.y))) {  // top to bottom: label on the right, else on the left, else none
+    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(r.y), y2: Y(r.y), stroke: r.color || "var(--context)", "stroke-width": 1.5, "stroke-dasharray": "1.5 3.5", "stroke-linecap": "round" }));
+    const side = ["right", "left"].find(k => Y(r.y) - lastY[k] >= 13);
+    if (!side) continue;
+    lastY[side] = Y(r.y);
+    const tx = s("text", { x: side === "right" ? W - m.r : m.l + 4, y: Y(r.y) - 4, "text-anchor": side === "right" ? "end" : "start", "font-size": 10.5, fill: r.color || "var(--muted)" }); tx.textContent = r.label; svg.append(tx);
+  }
+  for (const v of xt) { const tx = s("text", { x: X(v), y: H - m.b + 16, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }); tx.textContent = xFmt(v); svg.append(tx); }
+  if (xLabel) { const tx = s("text", { x: W - m.r, y: H - 2, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }); tx.textContent = xLabel; svg.append(tx); }
+  for (const sr of series) {
+    const pts = [...sr.points].sort((a, b) => a[0] - b[0]);
+    if (sr.kind === "band") {  // points [x, edge, other]: shaded between the two, dotted along the edge
+      svg.append(s("path", { d: "M" + [...pts.map(p => `${X(p[0])},${Y(p[2])}`), ...[...pts].reverse().map(p => `${X(p[0])},${Y(p[1])}`)].join("L") + "Z", fill: sr.color, "fill-opacity": 0.1, stroke: "none" }));
+      svg.append(s("path", { d: "M" + pts.map(p => `${X(p[0])},${Y(p[1])}`).join("L"), fill: "none", stroke: sr.color, "stroke-width": 1.5, "stroke-dasharray": "1.5 3.5", "stroke-linecap": "round", opacity: 0.7 }));
+    } else if (sr.kind === "dots") {
+      for (const p of pts) svg.append(s("circle", { cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }));
+    } else {
+      let d = "";
+      pts.forEach((p, i) => { if (i === 0) d += `M${X(p[0])},${Y(p[1])}`; else if (sr.kind === "step") d += `H${X(p[0])}V${Y(p[1])}`; else d += `L${X(p[0])},${Y(p[1])}`; });
+      svg.append(s("path", { d, fill: "none", stroke: sr.color, "stroke-width": sr.thin ? 1.5 : 2, "stroke-linejoin": "round", "stroke-linecap": "round", "stroke-dasharray": sr.dotted ? "1.5 3.5" : null, opacity: sr.aside ? 0.4 : null }));
+      const last = pts[pts.length - 1];
+      if (!sr.dotted && !sr.aside) svg.append(s("circle", { cx: X(last[0]), cy: Y(last[1]), r: 4, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }));
+      if (sr.endLabel) { const tx = s("text", { x: Math.min(X(last[0]) + 8, W - m.r), y: Y(last[1]) - 8, "text-anchor": X(last[0]) > W - 90 ? "end" : "start", "font-size": 11, fill: "var(--ink-2)" }); tx.textContent = sr.endLabel(last); svg.append(tx); }
+    }
+  }
+  const cross = s("line", { y1: m.t, y2: H - m.b, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
+  svg.append(cross);
+  const hit = s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent", tabindex: 0 });
+  svg.append(hit);
+  const tip = h("div", { class: "tip", style: "display:none" });
+  function show(clientX) {
+    const r = svg.getBoundingClientRect(), vx = (clientX - r.left) / r.width * W;
+    let best = uniq[0]; for (const v of uniq) if (Math.abs(X(v) - vx) < Math.abs(X(best) - vx)) best = v;
+    cross.setAttribute("x1", X(best)); cross.setAttribute("x2", X(best)); cross.setAttribute("visibility", "visible");
+    tip.replaceChildren();
+    tip.append(h("div", { class: "t" }, tipTitle ? tipTitle(best) : `${xLabel || "x"} ${xFmt(best)}`));
+    const rows = [];
+    for (const sr of shown) {
+      const p = nearest ? nearestPoint(sr.points, best) : sr.points.find(q => q[0] === best) || (sr.kind === "step" ? [...sr.points].filter(q => q[0] <= best).pop() : null);
+      if (p) rows.push([sr, p]);
+    }
+    if (nearest) rows.sort((a, b) => b[1][1] - a[1][1]);  // runs overlaid: highest first, so the order reads as a ranking
+    for (const [sr, p] of rows) tip.append(h("div", { class: "row" }, seriesKey(sr), h("span", { class: "v" }, yv(p)), h("span", { class: "dim" }, sr.name)));
+    tip.style.display = "block";
+    const px = X(best) / W * r.width; tip.style.left = Math.min(px + 12, r.width - tip.offsetWidth - 4) + "px"; tip.style.top = "8px";
+  }
+  hit.addEventListener("pointermove", e => show(e.clientX));
+  hit.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
+  hit.addEventListener("focus", () => { const r = svg.getBoundingClientRect(); show(r.left + r.width - 20); });
+  hit.addEventListener("blur", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
+  plot.append(svg, tip);
+  }
+  const tv = h("details", { class: "table-view" }, h("summary", {}, "table"));
+  tv.addEventListener("toggle", () => {
+    if (tv.open && tv.childElementCount === 1) tv.append(table([[xLabel || "x"], ...shown.map(sr => [sr.name, "num"])],
+      uniq.map(x => [xFmt(x), ...shown.map(sr => { const p = sr.points.find(q => q[0] === x); return p ? yv(p) : ""; })])));
+  });
+  wrap.append(tv);
+  return wrap;
+}
+
+// -- drawer -----------------------------------------------------------------------------------------------------
+const drawer = document.getElementById("drawer"), scrim = document.getElementById("scrim");
+let drawerState = null;
+function dhead() { return h("div", { class: "dhead" }, h("button", { class: "icon-btn", onclick: closeDrawer, title: "Close (Esc)", "aria-label": "Close" }, "✕")); }
+async function refreshDrawer(state = drawerState) {
+  if (!state || state !== drawerState) return;
+  if (state.loading) { state.again = true; return; }
+  state.loading = true;
+  try {
+    const nodes = await state.build();
+    if (drawerState !== state) return;
+    const scroll = drawer.scrollTop, f = document.activeElement;
+    const keep = f && drawer.contains(f) && f.dataset.keep ? [f.dataset.keep, f.selectionStart, f.selectionEnd] : null;
+    drawer.replaceChildren(dhead(), ...[nodes].flat(Infinity));
+    drawer.scrollTop = scroll;
+    const again = keep && drawer.querySelector(`[data-keep="${keep[0]}"]`);  // typing in it while the run refreshes
+    if (again) { again.focus({ preventScroll: true }); try { again.setSelectionRange(keep[1], keep[2]); } catch (e) { } }
+  } catch (e) {
+    if (drawerState === state) drawer.replaceChildren(dhead(), errBox(e));
+  } finally { state.loading = false; state.updated = Date.now(); if (state.again) { state.again = false; refreshDrawer(state); } }
+}
+function openDrawer(build, hash, live = false, wide = false) {
+  drawerState = { build, live, loading: false, updated: 0 };
+  drawer.classList.toggle("wide", wide);
+  drawer.replaceChildren(dhead(), h("div", { class: "empty" }, "loading…"));
+  drawer.classList.add("open"); scrim.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
+  if (hash) history.replaceState(null, "", `?comp=${encodeURIComponent(COMP)}#${TAB}/${hash}`);
+  refreshDrawer();
+}
+function closeDrawer() { syncPicks(); drawerState = null; drawer.classList.remove("open"); scrim.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); history.replaceState(null, "", `?comp=${encodeURIComponent(COMP)}#${TAB}`); }
+scrim.addEventListener("click", closeDrawer);
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeDrawer();
+  const q = drawer.classList.contains("open") ? drawer.querySelector(".curves-bar input[type=search]") : main.querySelector(".curves-bar input[type=search]");
+  if (e.key === "/" && q && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) { e.preventDefault(); q.focus(); }  // / filters the charts
+});
+function errBox(e) { return h("div", { class: "err-banner" }, h("strong", {}, "Error: "), e.message, e.fix ? h("div", { class: "cmd" }, "fix: " + e.fix) : null); }
+function kv(pairs) { return h("dl", { class: "kv" }, pairs.filter(([, v]) => v != null && v !== "").map(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])); }
+
+// -- a run's training telemetry: curves (metrics.jsonl), counters, progress --------------------------------------------
+const CURVE_PREFS = "kx-curves";
+function curvePrefs() { try { return { x: "step", smooth: 0, log: false, ...JSON.parse(localStorage.getItem(CURVE_PREFS) || "{}") }; } catch (e) { return { x: "step", smooth: 0, log: false }; } }
+function setCurvePrefs(p) { try { localStorage.setItem(CURVE_PREFS, JSON.stringify(p)); } catch (e) { } }
+const wideCurves = new Set();  // metric charts opened full width (kept across the drawer's live refreshes)
+let curveQuery = "";  // the chart filter, kept the same way
+const CURVE_MAX = 48;  // charts drawn at once; the filter reaches the rest
+// Words (spaces or commas) any of which a chart's name contains; -word leaves out names that contain it.
+function curveMatch(name, query) {
+  const words = query.toLowerCase().split(/[\s,]+/).filter(Boolean), n = name.toLowerCase();
+  const want = words.filter(w => !w.startsWith("-")), not = words.filter(w => w.startsWith("-") && w.length > 1).map(w => w.slice(1));
+  return (!want.length || want.some(w => n.includes(w))) && !not.some(w => n.includes(w));
+}
+let runDetailsOpen = false;
+
+// One metric as logged: its passes (a step that goes back starts a new one: a validation sweep, a resumed run), and
+// whether it is a counter (never decreases, whole numbers: steps, episodes), which reads better as a rate.
+function analyzeCurve(points, times) {
+  const passes = [[]];
+  points.forEach((p, i) => {
+    if (i && p[0] < points[i - 1][0]) passes.push([]);
+    passes[passes.length - 1].push({ step: p[0], v: p[1], t: times ? times[i] : null });
+  });
+  const counter = points.length >= 3 && passes.length === 1 && points.every((p, i) => Number.isInteger(p[1]) && (!i || p[1] >= points[i - 1][1])) && points[points.length - 1][1] > points[0][1];
+  const vs = points.map(p => p[1]);
+  return { passes, counter, last: vs[vs.length - 1], first: vs[0], min: lo(vs), max: hi(vs) };
+}
+function ema(vals, w) {  // smoothed like TensorBoard: debiased, so the start is not pulled toward zero
+  let m = 0, n = 0;
+  return vals.map(v => { m = w * m + (1 - w) * v; n = w * n + (1 - w); return m / n; });
+}
+function rateOf(pass) {  // per second, over the last points that have times
+  const p = pass.filter(q => q.t != null).slice(-12);
+  if (p.length < 2 || p[p.length - 1].t <= p[0].t) return null;
+  return (p[p.length - 1].v - p[0].v) / (p[p.length - 1].t - p[0].t);
+}
+function perSec(r) { return r == null ? "–" : r >= 1 ? `${compact(r)}/s` : r * 60 >= 1 ? `${fmt(r * 60, 3)}/min` : `${fmt(r * 3600, 3)}/h`; }
+
+function curveCard(name, c, t0, prefs, rerender, height = 170) {
+  const wide = wideCurves.has(name);
+  const timeX = prefs.x === "time" && c.passes.some(p => p.some(q => q.t != null));
+  const logY = prefs.log && c.min > 0;
+  const ty = v => logY ? Math.log10(v) : v, uy = v => logY ? 10 ** v : v;
+  const series = [];
+  c.passes.forEach((pass, i) => {
+    const pts = pass.filter(q => !timeX || q.t != null).map(q => [timeX ? q.t - t0 : q.step, ty(q.v)]);
+    if (!pts.length) return;
+    const latest = i === c.passes.length - 1;
+    const label = c.passes.length > 1 ? `${name} · pass ${i + 1}` : name;
+    if (prefs.smooth > 0 && pts.length > 3) {
+      series.push({ name: label + " (raw)", points: pts, color: latest ? "var(--series-1)" : "var(--context)", aside: true, thin: true });
+      const sm = ema(pts.map(p => p[1]), prefs.smooth);
+      series.push({ name: label, points: pts.map((p, j) => [p[0], sm[j]]), color: latest ? "var(--series-1)" : "var(--context)", aside: !latest });
+    } else series.push({ name: label, points: pts, color: latest ? "var(--series-1)" : "var(--context)", aside: !latest, thin: !latest });
+  });
+  const change = c.first ? (c.last - c.first) / Math.abs(c.first) : null;
+  const sub = [`min ${fmt(c.min)} · max ${fmt(c.max)}`, change != null && Math.abs(change) >= 0.001 ? `${change > 0 ? "+" : ""}${(change * 100).toFixed(1)}% since start` : null,
+    c.passes.length > 1 ? `${c.passes.length} passes (step restarts), latest bold` : null].filter(Boolean).join(" · ");
+  return h("div", { class: "card" + (wide ? " wide" : "") },
+    h("div", { class: "curve-head" }, h("span", { class: "name", title: name }, name), h("span", { class: "last" }, fmt(c.last)),
+      h("button", { class: "icon-btn", title: wide ? "Smaller" : "Full width", "aria-label": wide ? `Shrink ${name}` : `Widen ${name}`,
+        onclick: () => { wide ? wideCurves.delete(name) : wideCurves.add(name); rerender(); } }, wide ? "⤡" : "⤢")),
+    h("div", { class: "curve-sub", title: sub }, sub),
+    lineChart({ series, height: wide ? Math.max(300, height) : height, title: name, xLabel: timeX ? "time" : "step", xFmt: timeX ? (v => dur(v)) : compact,
+      yFmt: v => fmt(uy(v)), yTickFmt: v => compact(uy(v)), tipTitle: x => timeX ? `after ${dur(x)}` : `step ${fmt(x)}` }));
+}
+
+function curvesSection(r) {
+  const pts = r.curve_points || {}, times = r.curve_times || {};
+  const all = Object.fromEntries(Object.keys(pts).map(k => [k, analyzeCurve(pts[k], times[k])]));
+  const names = Object.keys(all).filter(k => !all[k].counter);
+  const counters = Object.keys(all).filter(k => all[k].counter);
+  if (!names.length) return { counters, all, node: null };
+  const ts = Object.values(times).flat().filter(t => t != null);
+  const t0 = ts.length ? lo(ts) : 0;
+  const box = h("div"), grid = h("div", { class: "curves" }), count = h("span", { class: "count", "aria-live": "polite" });
+  const renderGrid = () => {
+    const prefs = curvePrefs(), hits = names.filter(k => curveMatch(k, curveQuery)), shown = hits.slice(0, CURVE_MAX);
+    const height = shown.length <= 2 ? 280 : shown.length <= 6 ? 220 : 180;  // taller when there is room
+    grid.replaceChildren(...shown.map(k => curveCard(k, all[k], t0, prefs, renderGrid, height)));
+    if (!hits.length) grid.append(h("div", { class: "empty" }, `No chart name matches “${curveQuery}”.`));
+    count.textContent = (hits.length === names.length ? `${names.length} charts` : `${hits.length} of ${names.length} charts`)
+      + (shown.length < hits.length ? ` · first ${shown.length} drawn: filter to see the rest` : "");
+  };
+  const render = () => {
+    const prefs = curvePrefs();
+    const seg = (key, opts, label) => h("div", { class: "seg", role: "group", "aria-label": label }, opts.map(([v, text]) =>
+      h("button", { "aria-pressed": prefs[key] === v ? "true" : "false", onclick: () => { setCurvePrefs({ ...prefs, [key]: v }); render(); } }, text)));
+    const search = h("input", { type: "search", value: curveQuery, "data-keep": "curve-q", "aria-label": "Filter charts by name",
+      placeholder: `filter ${names.length} charts (/)`, title: "Words any of which the name contains; -word leaves names out",
+      oninput: e => { curveQuery = e.target.value; renderGrid(); },
+      onkeydown: e => { if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = curveQuery = ""; renderGrid(); } } });
+    box.replaceChildren(
+      h("h2", {}, "Training curves", h("span", { class: "h2sub" }, `${names.length} metric${names.length > 1 ? "s" : ""} from metrics.jsonl`)),
+      h("div", { class: "curves-bar" }, names.length > 1 ? search : null, seg("x", [["step", "Step"], ["time", "Time"]], "X axis"),
+        seg("smooth", [[0, "Raw"], [0.6, "Smooth"], [0.9, "Smoother"]], "Smoothing"),
+        seg("log", [[false, "Linear"], [true, "Log"]], "Y scale"), count),
+      grid);
+    renderGrid();
+  };
+  render();
+  return { counters, all, node: box };
+}
+
+function runStats(r, counters, all) {
+  const p = r.status === "running" && r.live ? r.live.progress : null;
+  const end = r.finished ? new Date(r.finished).getTime() : Date.now();
+  const tiles = [];
+  const stat = (label, value, sub, extra) => h("div", { class: "stat" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value), sub ? h("div", { class: "sub", title: sub }, sub) : null, extra || null);
+  if (p && p.total) tiles.push(stat("Progress", [`${(p.percent || 0).toFixed(1)}`, h("small", {}, "%")], `${p.phase} · ${compact(p.completed)}/${compact(p.total)} ${p.unit}`,
+    h("div", { class: "progress" }, h("div", { style: `width:${p.percent || 0}%` }))));
+  const fresh = r.status === "running" && p && p.age_s != null && p.age_s <= 60;
+  tiles.push(stat(r.status === "running" ? "Running for" : "Ran for", dur((end - new Date(r.created).getTime()) / 1000),
+    r.finished ? `ended ${ago(r.finished)} ago` : fresh ? `updated ${dur(p.age_s)} ago` : `started ${ago(r.created)} ago`));
+  if (p && p.eta_s) tiles.push(stat("ETA", dur(p.eta_s), p.phase));
+  if (p && p.started && p.updated && p.completed != null) {
+    const secs = (new Date(p.updated) - new Date(p.started)) / 1000, done = p.completed - (p.baseline_completed || 0);
+    if (secs > 0 && done > 0) tiles.push(stat("Speed", perSec(done / secs).replace("/", ` ${p.unit}/`), "since this phase started"));
+  }
+  for (const k of counters.slice(0, 4)) { const c = all[k]; tiles.push(stat(k, compact(c.last), perSec(rateOf(c.passes[0])))); }
+  if (r.status === "running" && p && p.age_s != null && !fresh) tiles.push(stat("Last update", `${dur(p.age_s)} ago`, "stale: waiting for fresh data"));
+  return tiles.length > 1 || (p && p.total) || Object.keys(all).length ? h("div", { class: "card stats run-stats" }, tiles) : null;
+}
+
+const seenRuns = new Map();  // "comp run" -> its data when last shown, drawn at once when it opens again
+async function showRun(ref) {
+  const key = `${COMP} ${ref}`;
+  let first = true;
+  openDrawer(async () => {
+    const seen = first && seenRuns.get(key);
+    first = false;
+    if (seen) refreshDrawer(drawerState);  // it is loading: it runs again with fresh data once this draw ends
+    const r = seen || await api(`run/${encodeURIComponent(ref)}`);
+    seenRuns.delete(key); seenRuns.set(key, r);
+    if (seenRuns.size > 6) seenRuns.delete(seenRuns.keys().next().value);
+    const host = r.remote && r.remote.host;
+    const hyp = h("div", { class: "sec wrap clamp", title: "Click to show all" }, r.hypothesis || "");
+    hyp.addEventListener("click", () => hyp.classList.toggle("clamp"));
+    const others = state.compare.filter(x => x !== r.run).length;
+    const out = [h("h3", {}, `${r.run} `, badge(r.status, RUN_KIND[r.status]), host ? h("span", { class: "chip", title: "ran on this host" }, `@${host}`) : null,
+      h("button", { class: "btn", style: "margin-left:auto;font-size:12.5px", title: "Its curves, scores and config next to other runs'", onclick: () => {
+        if (!state.compare.includes(r.run)) setSelection(state.compare.length < CMP_MAX ? [...state.compare, r.run] : [...state.compare.slice(0, CMP_MAX - 1), r.run]);
+        showCompare(); } }, others ? `Compare with ${others} selected` : "Compare…")), hyp];
+    out.push(h("div", { class: "dim", style: "margin:6px 0 12px" }, `${r.kind} · by ${r.author || "–"} · ${ago(r.created)} ago`, r.task ? ` · T${r.task}` : ""));
+    const cur = curvesSection(r);
+    const stats = runStats(r, cur.counters, cur.all);
+    if (stats) out.push(stats);
+    if (r.error) out.push(h("h2", {}, "Error"), h("pre", { class: "error-box" }, r.error.slice(-3000)));
+    if (r.scores && r.scores.length) out.push(h("h2", {}, "Scores"), table([["protocol"], ["score", "num"], ["n", "num"]], r.scores.map(x => [h("span", { class: "id" }, x.protocol), score(x.value, x.se), x.n ?? ""])));
+    if (cur.node) out.push(cur.node);
+    const cmd = Array.isArray(r.command) ? r.command.join(" ") : r.command;
+    const details = kv([["git", (r.git_sha || "–").slice(0, 10) + (r.git_dirty ? " (dirty)" : "") + (r.git_branch ? ` on ${r.git_branch}` : "")], ["command", h("span", { class: "cmd" }, cmd || "")],
+      ["host", host], ["parent", r.parent ? rid(r.parent) : null], ["children", (r.children || []).join(", ") || null], ["tags", (r.tags || []).join(", ") || null], ["dir", h("span", { class: "cmd" }, r.dir)]]);
+    if (cur.node) {
+      const d = h("details", { class: "run-details", open: runDetailsOpen ? true : null }, h("summary", {}, "Command, git and paths"), details);
+      d.addEventListener("toggle", () => { runDetailsOpen = d.open; });
+      out.push(d);
+    }
+    else out.push(details);
+    if (r.notes && r.notes.length) out.push(h("h2", {}, "Notes"), r.notes.map(n => h("div", { class: "note" }, h("div", { class: "when" }, `${ago(n.ts)} ago · ${n.author || ""}`), h("div", { class: "wrap" }, n.text))));
+    if (r.config) out.push(h("h2", {}, "Config"), h("pre", {}, JSON.stringify(r.config, null, 2)));
+    if (r.metrics) out.push(h("h2", {}, "Metrics"), kv(Object.entries(r.metrics).map(([k, v]) => [k, fmt(v)])));
+    for (const o of (r.objects || []).filter(o => o.kind === "table" && o.preview)) {
+      out.push(h("h2", {}, o.name, h("span", { class: "h2sub" }, `${o.metadata.rows ?? o.preview.rows.length} rows${o.preview.truncated ? " (first 100)" : ""}`)),
+        h("div", { class: "card flush", style: "overflow-x:auto" }, table(o.preview.columns.map((c, j) => [c, o.preview.rows.every(row => row[j] == null || typeof row[j] === "number") ? "num" : ""]),
+          o.preview.rows.map(row => row.map(c => typeof c === "number" ? fmt(c) : (c ?? ""))))));
+    }
+    const shown = new Set((r.objects || []).filter(o => o.kind === "table" && o.preview).map(o => o.path));  // tables above, not as files again
+    if (r.artifacts && r.artifacts.length) out.push(h("h2", {}, "Artifacts"), table([["file"], ["size", "num"]], r.artifacts.filter(a => !shown.has(a.path)).map(a => [h("span", { class: "id" }, a.path), a.bytes > 1e5 ? `${(a.bytes / 1e6).toFixed(1)} MB` : `${a.bytes} B`])));
+    const left = (r.remote && r.remote.on_host) || [];  // big files kept on the host until someone fetches them
+    if (left.length) out.push(h("h2", {}, `Still on ${r.remote.host}`, h("span", { class: "h2sub" }, "big files stay there until fetched")),
+      table([["file"], ["size", "num"]], left.map(a => [h("span", { class: "id" }, a.path), `${(a.bytes / 1e6).toFixed(0)} MB`])),
+      h("div", { class: "cmd", style: "margin-top:6px" }, `kx fetch ${r.run} ${left.length === 1 ? left[0].path : "[PATH ...]"}`));
+    if (r.pushes && r.pushes.length) out.push(h("h2", {}, "On Kaggle"), table([["pushed"], ["what"], ["version", "num"], ["when", "num"]],
+      r.pushes.map(p => [p.kind, p.url ? ext(p.url, p.target) : h("span", { class: "id" }, p.target), p.version ?? "", `${ago(p.created)} ago`])));
+    return out;
+  }, `run=${ref}`, true, true);
+}
+
+// -- comparing runs: their curves overlaid, scores (with kx's paired test against a baseline), what differs ------------
+const CMP_MAX = 8;  // one color each
+const cmp = { runs: new Map(), pairs: new Map(), list: null, listAt: 0, listing: null, protos: null, colors: new Map(), hidden: new Set(), query: "", scope: "shared", allConfig: false };
+function loadSelection() {  // compareSaved: a selection was kept before (then an empty one stays empty)
+  try { const v = localStorage.getItem(`kx-compare:${COMP}`); state.compareSaved = v != null; state.compare = JSON.parse(v || "[]").slice(0, CMP_MAX); } catch (e) { state.compare = []; }
+}
+function setSelection(v) { state.compare = [...new Set(v)].slice(0, CMP_MAX); try { localStorage.setItem(`kx-compare:${COMP}`, JSON.stringify(state.compare)); } catch (e) { } }
+function resetCompare() { cmp.runs.clear(); cmp.pairs.clear(); cmp.list = cmp.listing = null; cmp.listAt = 0; cmp.protos = null; cmp.colors.clear(); cmp.hidden.clear(); }
+function runRef(v) { v = v.trim(); return /^r?\d+$/i.test(v) ? rid(parseInt(v.replace(/^r/i, ""), 10)) : v; }
+let paintSel = () => { };  // the Runs tab's selection bar, when it is shown
+function syncPicks() { document.querySelectorAll("input.pickbox").forEach(b => { b.checked = state.compare.includes(b.dataset.run); }); paintSel(); }
+function pickBox(run) {
+  return h("label", { class: "pickcell", title: "Select to compare", onclick: e => e.stopPropagation(), onkeydown: e => e.stopPropagation() },
+    h("input", { type: "checkbox", class: "pickbox", "data-run": run, checked: state.compare.includes(run) || null, "aria-label": `Select ${run} to compare`,
+      onchange: e => {
+        const on = e.target.checked;
+        if (on && state.compare.length >= CMP_MAX) { e.target.checked = false; return paintSel(`at most ${CMP_MAX} runs at once`); }
+        setSelection(on ? [...state.compare, run] : state.compare.filter(x => x !== run)); paintSel();
+      } }));
+}
+function cmpColor(run) {  // a run keeps its color while it stays in the comparison
+  for (const k of [...cmp.colors.keys()]) if (!state.compare.includes(k)) cmp.colors.delete(k);
+  if (!cmp.colors.has(run)) { const used = new Set(cmp.colors.values()); let i = 0; while (used.has(i)) i++; cmp.colors.set(run, i); }
+  return `var(--series-${(cmp.colors.get(run) % CMP_MAX) + 1})`;
+}
+async function cmpRun(ref) {
+  if (cmp.runs.has(ref)) return cmp.runs.get(ref);
+  const r = await api(`run/${encodeURIComponent(ref)}`);
+  if (r.status !== "running") cmp.runs.set(ref, r);  // a finished run does not change
+  return r;
+}
+async function cmpVerdicts(base, r) {  // kx compare: is r better than the baseline, per shared protocol
+  const key = `${base.run}:${r.run}`;
+  if (cmp.pairs.has(key)) return cmp.pairs.get(key);
+  const d = await api(`compare?a=${encodeURIComponent(base.run)}&b=${encodeURIComponent(r.run)}`).catch(() => null);
+  const out = Object.fromEntries(((d && d.comparisons) || []).map(c => [c.protocol, c]));
+  if (base.status !== "running" && r.status !== "running") cmp.pairs.set(key, out);
+  return out;
+}
+function cmpList() {  // recent runs with the curves each logs, for suggestions: what is at hand, fetched behind the charts
+  if (!cmp.listing && (!cmp.list || Date.now() - cmp.listAt > (cmp.list.some(r => r.status === "running") ? 15000 : 60000))) {
+    const comp = COMP, again = !!cmp.list;  // a refresh of a list already shown redraws the tab
+    const p = cmp.listing = api("runs?n=300&curves=1").then(l => { if (COMP === comp) { cmp.list = l; if (again && TAB === "training") load(); } })
+      .catch(() => { }).finally(() => { if (cmp.listing === p) { cmp.listing = null; cmp.listAt = Date.now(); } });
+  }
+  return cmp.list || [];
+}
+// Runs whose curves overlap these the most (Jaccard on curve names), newest first among equals.
+function similarRuns(names, list, n = 10) {
+  return list.filter(r => !state.compare.includes(r.run) && r.curves && r.curves.length).map(r => {
+    const shared = r.curves.filter(k => names.has(k)).length;
+    return { r, shared, sim: shared / (names.size + r.curves.length - shared) };
+  }).filter(x => x.shared).sort((a, b) => b.sim - a.sim).slice(0, n);
+}
+function flatten(o, pre = "", out = {}) {
+  for (const [k, v] of Object.entries(o || {})) {
+    if (v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length) flatten(v, `${pre}${k}.`, out);
+    else out[pre + k] = v;
+  }
+  return out;
+}
+function cellText(v) { return v == null ? "–" : typeof v === "number" ? fmt(v) : typeof v === "string" ? v : JSON.stringify(v); }
+const sameValue = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+function deltaText(v, base) {
+  if (typeof v !== "number" || typeof base !== "number" || v === base) return null;
+  return base ? `${v > base ? "+" : ""}${fmt((v - base) / Math.abs(base) * 100, 2)}%` : `${v > base ? "+" : ""}${fmt(v - base, 3)}`;
+}
+
+function cmpChanged() { syncPicks(); load(); }
+function showCompare() { closeDrawer(); TAB === "training" ? load() : setTab("training"); }  // the Training tab shows the selection
+
+function compareCard(name, entries, total, prefs, rerender, height) {
+  const wide = wideCurves.has(name);
+  const timeX = prefs.x === "time" && entries.some(e => e.c.passes.some(p => p.some(q => q.t != null)));
+  const logY = prefs.log && entries.every(e => e.c.min > 0);
+  const ty = v => logY ? Math.log10(v) : v, uy = v => logY ? 10 ** v : v;
+  const series = [];
+  for (const e of entries) {
+    const pass = e.c.passes[e.c.passes.length - 1];  // a sweep logged again and again: its latest pass
+    const pts = pass.filter(q => !timeX || q.t != null).map(q => [timeX ? q.t - e.t0 : q.step, ty(q.v)]);
+    if (!pts.length) continue;
+    if (prefs.smooth > 0 && pts.length > 3) {
+      series.push({ name: e.run + " (raw)", points: pts, color: e.color, aside: true, thin: true });
+      const sm = ema(pts.map(p => p[1]), prefs.smooth);
+      series.push({ name: e.run, points: pts.map((p, j) => [p[0], sm[j]]), color: e.color });
+    } else series.push({ name: e.run, points: pts, color: e.color });
+  }
+  const sub = [entries.length < total ? `in ${entries.length} of ${total} runs` : null,
+    entries.some(e => e.c.passes.length > 1) ? "latest pass of each (steps restart)" : null].filter(Boolean).join(" · ");
+  return h("div", { class: "card" + (wide ? " wide" : "") },
+    h("div", { class: "curve-head" }, h("span", { class: "name", title: name }, name),
+      h("button", { class: "icon-btn", style: "margin-left:auto", title: wide ? "Smaller" : "Full width", "aria-label": wide ? `Shrink ${name}` : `Widen ${name}`,
+        onclick: () => { wide ? wideCurves.delete(name) : wideCurves.add(name); rerender(); } }, wide ? "⤡" : "⤢")),
+    h("div", { class: "cmp-vals" }, entries.map(e => h("span", { title: `${e.run}: last ${fmt(e.c.last)} · min ${fmt(e.c.min)} · max ${fmt(e.c.max)}` },
+      h("i", { class: "dot", style: `--c:${e.color}` }), h("b", {}, fmt(e.c.last))))),
+    sub ? h("div", { class: "curve-sub", title: sub }, sub) : null,
+    lineChart({ series, height: wide ? Math.max(320, height) : height, title: name, xLabel: timeX ? "time" : "step", xFmt: timeX ? (v => dur(v)) : compact, legend: false, nearest: true,
+      yFmt: v => fmt(uy(v)), yTickFmt: v => compact(uy(v)), tipTitle: x => timeX ? `after ${dur(x)}` : `step ${fmt(x)}` }));
+}
+
+function compareCharts(vis, an, total) {
+  const have = {};  // curve name -> the shown runs that log it
+  for (const r of vis) for (const k of Object.keys(an.get(r.run))) (have[k] = have[k] || []).push(r);
+  const names = Object.keys(have).filter(k => !have[k].every(r => an.get(r.run)[k].counter)).sort((a, b) => have[b].length - have[a].length);
+  if (!names.length) return null;
+  const shared = names.filter(k => have[k].length >= 2);
+  const t0 = Object.fromEntries(vis.map(r => { const ts = Object.values(r.curve_times || {}).flat().filter(t => t != null); return [r.run, ts.length ? lo(ts) : 0]; }));
+  const box = h("div"), grid = h("div", { class: "curves" }), count = h("span", { class: "count", "aria-live": "polite" });
+  const pool = () => cmp.scope === "shared" && shared.length ? shared : names;
+  const renderGrid = () => {
+    const prefs = curvePrefs(), all = pool(), hits = all.filter(k => curveMatch(k, cmp.query)), drawn = hits.slice(0, CURVE_MAX);
+    const cards = ks => { const height = ks.length <= 2 ? 300 : ks.length <= 6 ? 240 : 200;
+      return ks.map(k => compareCard(k, have[k].map(r => ({ run: r.run, c: an.get(r.run)[k], color: cmpColor(r.run), t0: t0[r.run] })), vis.length, prefs, renderGrid, height)); };
+    const groups = new Map();  // "train/loss" and "train_acc" in a section "train", collapsible
+    const section = k => k.includes("/") ? k.slice(0, k.indexOf("/")) : ((k.match(/^(train|training|val|valid|validation|eval|test|dev)(?=[_.\-])/i) || [""])[0].toLowerCase());
+    for (const k of drawn) { const g = section(k); groups.set(g, [...(groups.get(g) || []), k]); }
+    grid.className = groups.size > 1 ? "" : "curves";
+    grid.replaceChildren(...(groups.size > 1 ? [...groups].map(([g, ks]) => {
+      const sec = h("details", { class: "ws-sec", open: !ws.collapsed.has(g) || null }, h("summary", {}, g || "other", h("span", { class: "h2sub" }, `${ks.length}`)), h("div", { class: "curves" }, cards(ks)));
+      sec.addEventListener("toggle", () => sec.open ? ws.collapsed.delete(g) : ws.collapsed.add(g));
+      return sec;
+    }) : cards(drawn)));
+    if (!hits.length) grid.append(h("div", { class: "empty" }, `No chart name matches “${cmp.query}”.`));
+    count.textContent = (hits.length === all.length ? `${all.length} charts` : `${hits.length} of ${all.length} charts`)
+      + (drawn.length < hits.length ? ` · first ${drawn.length} drawn: filter to see the rest` : "");
+  };
+  const render = () => {
+    const prefs = curvePrefs();
+    const seg = (get, set, opts, label) => h("div", { class: "seg", role: "group", "aria-label": label }, opts.map(([v, text, title]) =>
+      h("button", { "aria-pressed": get() === v ? "true" : "false", title: title || null, onclick: () => { set(v); render(); } }, text)));
+    const pref = key => [() => curvePrefs()[key], v => setCurvePrefs({ ...curvePrefs(), [key]: v })];
+    const search = h("input", { type: "search", value: cmp.query, "data-keep": "cmp-q", "aria-label": "Filter charts by name",
+      placeholder: `filter ${pool().length} charts (/)`, title: "Words any of which the name contains; -word leaves names out",
+      oninput: e => { cmp.query = e.target.value; renderGrid(); },
+      onkeydown: e => { if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = cmp.query = ""; renderGrid(); } } });
+    box.replaceChildren(
+      h("h2", {}, "Training curves", h("span", { class: "h2sub" }, `${shared.length} logged by 2+ runs · ${names.length} in all`)),
+      h("div", { class: "curves-bar" }, search,
+        shared.length && shared.length < names.length ? seg(() => cmp.scope, v => { cmp.scope = v; }, [["shared", "In 2+ runs", "curves at least two of these runs log"], ["all", "Any run"]], "Which curves") : null,
+        seg(...pref("x"), [["step", "Step"], ["time", "Time", "time since each run started"]], "X axis"),
+        seg(...pref("smooth"), [[0, "Raw"], [0.6, "Smooth"], [0.9, "Smoother"]], "Smoothing"),
+        seg(...pref("log"), [[false, "Linear"], [true, "Log"]], "Y scale"), count),
+      grid);
+    renderGrid();
+  };
+  render();
+  return box;
+}
+
+// The charts, then scores and config side by side, of the runs shown in the Training tab (the first is the baseline).
+function compareSections(runs, verdicts, refId) {
+  const out = [], base = runs[0];
+  const an = new Map(runs.map(r => { const pts = r.curve_points || {}, times = r.curve_times || {};
+    return [r.run, Object.fromEntries(Object.keys(pts).map(k => [k, analyzeCurve(pts[k], times[k])]))]; }));
+  const vis = runs.filter(r => !cmp.hidden.has(r.run));
+  const charts = compareCharts(vis, an, vis.length);
+  if (charts) out.push(charts);
+  else out.push(h("div", { class: "card" }, h("div", { class: "empty" }, !vis.length ? "Every run is hidden from the charts: click a color on the left to show it."
+    : "These runs log no curves (r.step in kx.run). Their scores and config are below.")));
+
+  // scores, reported metrics and counters side by side; numbers after the baseline say how far from it they are
+  const runHead = cls => runs.map(r => [h("span", { class: "id", style: "display:inline-flex;align-items:center;gap:5px" }, h("i", { class: "dot", style: `--c:${cmpColor(r.run)}` }), r.run), cls]);
+  const head = [["", ""], ...runHead("num")];
+  const protoIds = [...new Set(runs.flatMap(r => (r.scores || []).map(x => x.protocol)))].sort((a, b) => (b === refId) - (a === refId) || a.localeCompare(b));
+  const rows = protoIds.map(p => [h("span", { class: "id" }, p, p === refId ? h("span", { class: "dim" }, " · reference") : ""), ...runs.map((r, i) => {
+    const sc = (r.scores || []).find(x => x.protocol === p), c = i && verdicts[i][p];
+    return sc ? h("span", {}, score(sc.value, sc.se), c ? h("span", { class: "delta", title: `${c.method} · z ${c.z != null ? c.z.toFixed(2) : "–"}` }, `${{ better: "▲", worse: "▼", "within noise": "≈", inconsistent: "!" }[c.verdict] || "?"} ${c.verdict}`) : null) : "–";
+  })]);
+  const numbersOf = r => ({ ...(r.metrics || {}), ...Object.fromEntries(Object.entries(an.get(r.run)).filter(([, c]) => c.counter).map(([k, c]) => [`${k} (last)`, c.last])) });
+  const nums = runs.map(numbersOf), keys = [...new Set(nums.flatMap(Object.keys))].sort();
+  for (const k of keys) rows.push([h("span", { class: "id" }, k), ...nums.map((n, i) => n[k] == null ? "–" : h("span", {}, fmt(n[k]), i && deltaText(n[k], nums[0][k]) ? h("span", { class: "delta" }, deltaText(n[k], nums[0][k])) : null))]);
+  if (rows.length) out.push(h("h2", {}, "Scores and metrics", h("span", { class: "h2sub" }, runs.length > 1 ? `under each later run: how it compares with ${base.run}` : "")),
+    h("div", { class: "card flush cmp-table", style: "overflow-x:auto" }, table(head, rows)));
+
+  // config and how each run was made: what differs from the baseline is marked
+  const attrs = [["git", r => r.git_sha ? r.git_sha.slice(0, 10) + (r.git_dirty ? " (dirty)" : "") : null], ["branch", r => r.git_branch], ["command", r => Array.isArray(r.command) ? r.command.join(" ") : r.command],
+    ["host", r => r.remote && r.remote.host], ["by", r => r.author], ["task", r => r.task ? `T${r.task}` : null], ["tags", r => (r.tags || []).join(", ") || null]];
+  const flat = runs.map(r => flatten(r.config));
+  const cfgKeys = [...new Set(flat.flatMap(Object.keys))].sort();
+  const lines = [...attrs.map(([k, f]) => ({ k, dim: true, vals: runs.map(f) })), ...cfgKeys.map(k => ({ k, vals: flat.map(c => c[k]) }))];
+  const differ = l => l.vals.some(v => !sameValue(v, l.vals[0]));
+  const nDiff = lines.filter(differ).length, all = cmp.allConfig || runs.length === 1;
+  const shownLines = lines.filter(l => all ? l.vals.some(v => v != null) : differ(l));
+  out.push(h("h2", {}, "Config and code", h("span", { class: "h2sub" }, runs.length > 1 ? `${nDiff} of ${lines.length} differ` : `${cfgKeys.length} config keys`),
+    runs.length > 1 ? h("div", { class: "seg", style: "margin-left:auto", role: "group", "aria-label": "Rows" }, [[false, "Differences"], [true, "All"]].map(([v, text]) =>
+      h("button", { "aria-pressed": cmp.allConfig === v ? "true" : "false", onclick: () => { cmp.allConfig = v; load(); } }, text))) : null),
+    shownLines.length ? h("div", { class: "card flush cmp-table", style: "overflow-x:auto" }, table([["", ""], ...runHead("cfg")],
+      shownLines.map(l => [h("span", { class: l.dim ? "dim" : "id" }, l.k), ...l.vals.map((v, i) => {
+        const text = cellText(v), changed = i && !sameValue(v, l.vals[0]), long = text.length > 80;
+        if (!long) return h("span", { class: (changed ? "chg " : "") + (l.k === "command" ? "cmd" : ""), title: changed ? `${base.run}: ${cellText(l.vals[0])}` : null }, text);
+        const was = new Set(cellText(l.vals[0]).split(/\s+/));  // a long value: only its words the baseline lacks are marked
+        const cell = h("div", { class: "clamp" + (l.k === "command" ? " cmd" : ""), title: "Click to show all" },
+          changed ? text.split(/(\s+)/).map(w => w.trim() && !was.has(w) ? h("span", { class: "chg" }, w) : w) : text);
+        cell.addEventListener("click", () => cell.classList.toggle("clamp"));
+        return cell;
+      })])))
+      : h("div", { class: "empty" }, runs.length > 1 ? "Same config and code everywhere." : "No config recorded."));
+  return out;
+}
+
+// -- training: a workspace in the manner of wandb. On the left the runs (how each went, when, for how long); on the
+// right the curves of the ones shown, overlaid, then their scores and config. A row's + or a click shows it.
+const ws = { status: "all", sort: "new", curvesOnly: true, query: "", collapsed: new Set(), live: false };
+const tookS = r => r.finished ? (new Date(r.finished) - new Date(r.created)) / 1000 : r.status === "running" ? (Date.now() - new Date(r.created)) / 1000 : null;
+function runState(r) {
+  const p = r.progress;
+  if (r.status === "running" && p && p.percent != null) return badge(`${p.percent.toFixed(0)}%${p.eta_s ? ` · ${dur(p.eta_s)} left` : ""}`, "active");
+  return badge(r.status, RUN_KIND[r.status]);
+}
+function wsRow(r, { on, i = 0, n = 0, sim, full }) {
+  const stop = f => e => { e.stopPropagation(); f(); };
+  const toggle = () => { setSelection(on ? state.compare.filter(x => x !== r.run) : [...state.compare, r.run]); cmpChanged(); };
+  const off = on && cmp.hidden.has(r.run), t = tookS(r);
+  const lead = on
+    ? h("button", { class: "swatch", style: `--c:${cmpColor(r.run)}`, "aria-pressed": off ? "false" : "true", title: off ? "Show on the charts" : "Hide from the charts (it stays here)",
+        "aria-label": `${off ? "Show" : "Hide"} ${r.run} on the charts`, onclick: stop(() => { off ? cmp.hidden.delete(r.run) : cmp.hidden.add(r.run); load(); }) })
+    : h("button", { class: "ws-add", title: full ? `${CMP_MAX} runs shown, the most at once` : "Show on the charts", "aria-label": `Show ${r.run} on the charts`, disabled: full || null, onclick: stop(toggle) }, "+");
+  return h("div", { class: "ws-run" + (on ? " on" : "") + (full && !on ? " full" : ""), role: "listitem", "data-text": `${r.run} ${r.hypothesis || ""} ${r.task ? "T" + r.task : ""} ${r.host || ""} ${r.status} ${(r.curves || []).join(" ")}`.toLowerCase(),
+      onclick: on || full ? null : toggle }, lead,
+    h("div", { class: "ws-body" },
+      h("div", { class: "ws-top" }, h("button", { class: "ws-id", title: "Open the run", onclick: stop(() => showRun(r.run)) }, r.run), runState(r),
+        on && !i && n > 1 ? h("span", { class: "chip", title: "the others' scores and config are compared with it" }, "baseline") : null,
+        r.score ? h("span", { class: "ws-score", title: "score under the reference protocol" }, fmt(r.score.value)) : null),
+      h("div", { class: "ws-meta" }, [`${ago(r.created)} ago`, t != null ? `${r.status === "running" ? "running for" : "ran"} ${dur(t)}` : null, r.host ? `@${r.host}` : null, r.task ? `T${r.task}` : null, sim].filter(Boolean).join(" · ")),
+      r.hypothesis ? h("div", { class: "ws-hyp", title: r.hypothesis }, r.hypothesis) : null),
+    on ? h("div", { class: "ws-acts" }, i ? h("button", { class: "ws-mk", title: "Compare the others' scores and config with this run", onclick: stop(() => { setSelection([r.run, ...state.compare.filter(x => x !== r.run)]); cmpChanged(); }) }, "make baseline") : null,
+      h("button", { class: "icon-btn mini", title: "Remove from the charts", "aria-label": `Remove ${r.run}`, onclick: stop(toggle) }, "✕")) : null);
+}
+
+async function renderTraining() {
+  if (!cmp.list) { cmpList(); await cmp.listing; }
+  const list = cmpList();
+  if (!state.compare.length && !state.compareSaved) {  // a first visit: the latest run that logs curves
+    const latest = list.find(r => r.curves && r.curves.length);
+    if (latest) setSelection([latest.run]);
+  }
+  const [got, protos] = await Promise.all([Promise.all(state.compare.map(ref => cmpRun(ref).catch(e => ({ run: ref, missing: e.message })))),
+    cmp.protos || api("protocols").then(p => (cmp.protos = p)).catch(() => ({ reference: {} }))]);
+  const missing = got.filter(r => r.missing), runs = got.filter(r => !r.missing);
+  if (missing.length) setSelection(runs.map(r => r.run));
+  const refId = protos.reference && protos.reference.id;
+  const verdicts = await Promise.all(runs.map((r, i) => i ? cmpVerdicts(runs[0], r) : null));
+  ws.live = runs.some(r => r.status === "running") || list.some(r => r.status === "running");
+  if (TAB === "training" && !drawer.classList.contains("open"))
+    history.replaceState(null, "", `?comp=${encodeURIComponent(COMP)}#training${state.compare.length ? "/compare=" + state.compare.join(",") : ""}`);
+
+  const byId = new Map(list.map(r => [r.run, r]));
+  const info = r => byId.get(r.run) || { run: r.run, status: r.status, created: r.created, finished: r.finished, hypothesis: r.hypothesis, task: r.task,
+    host: r.remote && r.remote.host, score: (r.scores || []).find(x => x.protocol === refId), curves: Object.keys(r.curve_points || {}) };
+  const full = state.compare.length >= CMP_MAX, names = new Set(runs.flatMap(r => Object.keys(r.curve_points || {})));
+  const pool = list.filter(r => !state.compare.includes(r.run) && (!ws.curvesOnly || (r.curves && r.curves.length)));
+  const counts = { all: pool.length, running: 0, done: 0, failed: 0 };
+  for (const r of pool) if (r.status in counts) counts[r.status]++;
+  const sim = r => { const shared = (r.curves || []).filter(k => names.has(k)).length; return { shared, j: shared / ((names.size + (r.curves || []).length - shared) || 1) }; };
+  let rest = pool.filter(r => ws.status === "all" || r.status === ws.status);
+  if (ws.sort === "similar" && names.size) rest = rest.map(r => [r, sim(r).j]).sort((a, b) => b[1] - a[1]).map(([r]) => r);  // stable: newest first among equals
+  const simText = r => { if (!names.size) return null; const { shared } = sim(r); return shared ? `${shared}/${names.size} curves` : null; };
+
+  const seg = (get, set, opts, label) => h("div", { class: "seg", role: "group", "aria-label": label }, opts.map(([v, text, title]) =>
+    h("button", { "aria-pressed": get() === v ? "true" : "false", title: title || null, onclick: () => { set(v); load(); } }, text)));
+  const listBox = h("div", { class: "ws-list", role: "list" }, rest.map(r => wsRow(r, { sim: simText(r), full })));
+  const restCount = h("span", { class: "dim" });
+  const filter = () => {
+    const words = ws.query.toLowerCase().split(/\s+/).filter(Boolean);
+    let n = 0;
+    for (const el of listBox.children) { const hit = words.every(w => el.dataset.text.includes(w)); el.hidden = !hit; n += hit; }
+    restCount.textContent = n === rest.length ? `${rest.length}` : `${n} of ${rest.length}`;
+  };
+  const search = h("input", { type: "search", value: ws.query, "data-keep": "ws-q", placeholder: "filter runs: words in the id, hypothesis, host, curves", "aria-label": "Filter runs",
+    oninput: e => { ws.query = e.target.value; filter(); } });
+  const addBox = h("input", { type: "search", placeholder: "older run: r0123", "aria-label": "Show a run by id",
+    onkeydown: e => { const v = e.target.value.trim(); if (e.key === "Enter" && v && !full && !state.compare.includes(runRef(v))) { setSelection([...state.compare, runRef(v)]); cmpChanged(); } } });
+  const side = h("aside", { class: "card flush ws-side", "data-scroll": "ws-side" },
+    h("div", { class: "ws-head" }, search,
+      h("div", { class: "ws-filters" },
+        seg(() => ws.status, v => { ws.status = v; }, [["all", `All ${counts.all}`], ...["running", "done", "failed"].filter(k => counts[k] || ws.status === k).map(k => [k, `${k[0].toUpperCase() + k.slice(1)} ${counts[k]}`])], "Status"),
+        names.size ? seg(() => ws.sort, v => { ws.sort = v; }, [["new", "Newest"], ["similar", "Similar", "runs that log the most of the shown runs' curves first"]], "Order") : null),
+      h("label", { class: "dim ws-check" }, h("input", { type: "checkbox", checked: ws.curvesOnly || null, onchange: e => { ws.curvesOnly = e.target.checked; load(); } }), " only runs that log curves")),
+    h("div", { class: "ws-group" }, "On the charts", h("span", { class: "dim" }, `${runs.length}/${CMP_MAX}`)),
+    runs.length ? h("div", { role: "list" }, runs.map((r, i) => wsRow(info(r), { on: true, i, n: runs.length })))
+      : h("div", { class: "empty", style: "padding:10px 12px" }, "None yet: click a run below."),
+    h("div", { class: "ws-group" }, "Runs", restCount),
+    listBox,
+    h("div", { class: "ws-foot dim" }, `The ${list.length} newest runs.`, addBox));
+  filter();
+  const body = runs.length ? compareSections(runs, verdicts, refId)
+    : [h("div", { class: "card" }, h("div", { class: "empty" }, list.length ? "Pick runs on the left to see their curves here." : "No runs yet."))];
+  return [h("div", { class: "ws" }, side, h("div", { class: "ws-main" },
+    missing.length ? h("div", { class: "err-banner" }, missing.map(m => `${m.run}: ${m.missing}`).join(" · ")) : null, body))];
+}
+
+async function showTask(id) {
+  openDrawer(async () => {
+    const t = await api(`task/${encodeURIComponent(id)}`);
+    const out = [h("h3", {}, `T${t.id} ${t.title}`), h("div", { style: "margin:6px 0 12px" }, badge(t.status + (t.result ? ` · ${t.result}` : ""), TASK_KIND[t.status]), h("span", { class: "dim" }, `  p${t.priority}${t.owner ? " · " + t.owner : ""}`))];
+    out.push(kv([["waiting on", t.waiting_on], ["depends on", (t.depends || []).map(d => "T" + d).join(", ") || null], ["branch", t.branch], ["worktree", t.worktree ? h("span", { class: "cmd" }, t.worktree) : null]]));
+    if (t.body) out.push(h("h2", {}, "Description"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.body));
+    if (t.outcome) out.push(h("h2", {}, "Outcome"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.outcome));
+    if (t.notes && t.notes.length) out.push(h("h2", {}, "Progress notes"), t.notes.map(n => h("div", { class: "note" }, h("div", { class: "when" }, `${ago(n.ts)} ago · ${n.author || ""}`), h("div", { class: "wrap" }, n.text))));
+    if (t.runs && t.runs.length) out.push(h("h2", {}, "Runs"), table([["run"], ["status"], ["hypothesis"]], t.runs.map(r => [h("span", { class: "id" }, rid(r.id)), badge(r.status, RUN_KIND[r.status]), h("span", { class: "wrap" }, r.hypothesis || "")]), i => showRun(rid(t.runs[i].id))));
+    if (t.findings && t.findings.length) out.push(h("h2", {}, "Findings"), t.findings.map(f => h("div", { class: "note wrap" }, h("strong", {}, `F${f.id} `), h("span", { class: "chip" }, f.status), " ", f.text)));
+    return out;
+  }, `task=${id}`);
+}
+
+async function showSub(s) {
+  openDrawer(async () => {
+    const out = [h("h3", {}, `S${s.id} `, badge(s.status, SUB_KIND[s.status])), h("div", { class: "dim", style: "margin:6px 0 12px" }, `${s.run_id ? rid(s.run_id) : "external"} · ${ago(s.created)} ago · by ${s.actor || "–"}`)];
+    out.push(kv([["public", fmt(s.public)], ["private", s.private != null ? fmt(s.private) : null], ["message", s.message], ["why", s.why], ["expect", s.expect], ["error", s.error], ["target", s.target ? h("span", { class: "cmd" }, s.target) : null],
+      ["on Kaggle", [ext(L().submissions, "submissions page"), kernelUrl(s.target) ? [" · ", ext(kernelUrl(s.target), "kernel")] : null]]]));
+    if (s.games) {
+      const r = await api(`sub/S${s.id}`).catch(() => null);
+      const e = r && r.games ? { ...r.games, history: r.history } : null;
+      if (e) {
+        out.push(h("h2", {}, "Games"), kv([["played", e.games], ["record", `${e.win} won · ${e.loss} lost · ${e.tie} tied`], ["win rate", e.winrate != null ? `${(e.winrate * 100).toFixed(1)}% ±${(e.se * 100).toFixed(1)}` : null]]));
+        if (e.history && e.history.filter(p => p.episodes != null).length > 1) {
+          out.push(h("h2", {}, "Rating over games"));
+          out.push(lineChart({ series: [{ name: "rating", points: Object.values(Object.fromEntries(e.history.filter(p => p.public != null && p.episodes != null).map(p => [p.episodes, [p.episodes, p.public]]))), color: "var(--series-1)", endLabel: p => fmt(p[1]) }], height: 180, xLabel: "games", title: "rating" }));
+        }
+        if (e.opponents && e.opponents.length) out.push(h("h2", {}, "Most played opponents"), table([["opponent"], ["won", "num"], ["lost", "num"], ["tied", "num"]], e.opponents.map(o => [o.name, o.win, o.loss, o.tie])));
+      }
+    }
+    return out;
+  }, `sub=${s.id}`);
+}
+
+// -- tabs -------------------------------------------------------------------------------------------------------
+const NEED_KIND = { dead_run: ["critical", "×"], uncertain_submission: ["warning", "?"], failed_submission: ["critical", "×"], resume_task: ["good", "→"],
+  task_waits_on_you: ["warning", "!"], worker_failed: ["critical", "×"], unmerged_task: ["neutral", "⇢"], sync: ["neutral", "↻"], no_reference: ["neutral", "i"], budget: ["warning", "$"] };
+const TINT = { warning: ["var(--warn-soft)", "var(--warn-ink)"], critical: ["var(--crit-soft)", "var(--crit-ink)"], good: ["var(--good-soft)", "var(--good-ink)"], neutral: ["var(--chip)", "var(--ink-2)"] };
+function setCount(tab, n) {
+  const b = document.querySelector(`#tabs button[data-tab="${tab}"]`); if (!b) return;
+  b.querySelector(".count")?.remove(); if (n) b.append(h("span", { class: "count" }, n));
+}
+
+async function renderStatus() {
+  const [st, hist, lbd] = await Promise.all([api("status"), api("history" + (state.histProtocol ? `?protocol=${encodeURIComponent(state.histProtocol)}` : "")), api("leaderboard" + (state.lbProtocol ? `?protocol=${encodeURIComponent(state.lbProtocol)}` : "")).catch(() => null)]);
+  const out = [];
+  setCount("status", st.needs_you.length);
+  if (st.needs_you.length) {
+    out.push(h("h2", {}, "Needs you", h("span", { class: "h2sub" }, `${st.needs_you.length} item${st.needs_you.length === 1 ? "" : "s"}`)));
+    const needs = h("div", { class: "card needs" });
+    for (const n of st.needs_you) {
+      const [kind, sym] = NEED_KIND[n.kind] || ["neutral", "·"];
+      const [bg, fg] = TINT[kind];
+      const acts = h("div", { class: "actions" });
+      needs.append(h("div", { class: "need" }, h("span", { class: "icon", style: `background:${bg};color:${fg}`, "aria-hidden": "true" }, sym),
+        h("div", { class: "what wrap" }, n.what, n.age_s != null ? h("span", { class: "dim" }, ` · ${dur(n.age_s)}`) : null, h("code", {}, n.fix)), acts));
+    }
+    out.push(needs);
+  } else {
+    out.push(h("div", { class: "card needs clear" }, h("span", { class: "ok-dot", "aria-hidden": "true" }, "✓"), "Nothing needs you right now."));
+  }
+
+  const res = st.results, ref = res.reference, best = res.best[0];
+  const sub = st.submissions, sl = sub.slots, lb = sub.lb;
+  const runs = st.running.runs, workers = st.running.workers;
+  const pub = sub.recent.filter(x => x.public != null).map(x => x.public);
+  const bestPub = pub.length ? Math.max(...pub) : null;
+  const prevBest = hist.protocol === ref.id && hist.points.length > 1 ? hist.points[hist.points.length - 2].best : null;
+  const gain = best && prevBest != null && best.value !== prevBest ? best.value - prevBest : null;
+  const stat = (cls, label, value, small, subtext, url) => h("div", { class: `stat ${cls}` }, h("div", { class: "label" }, url ? ext(url, label, `${label} on Kaggle`) : label),
+    h("div", { class: "value" }, value, small ? h("small", {}, small) : null), h("div", { class: "sub", title: typeof subtext === "string" ? subtext : null }, subtext));
+  out.push(h("div", { class: "card stats" },
+    stat("hero", "Best local score", best ? fmt(best.value) : "–", best && best.se != null ? `±${fmt(best.se, 2)}` : null,
+      best ? [h("span", { class: "id" }, best.run), gain != null ? ` · +${fmt(gain, 2)} vs previous best` : "", ` · ${ref.id}`] : (ref.id || "no scored runs yet")),
+    stat("", "Public leaderboard", bestPub != null ? fmt(bestPub, 3) : "–", lb && lb.our_rank ? `#${lb.our_rank}` : null,
+      lb ? `of ${lb.n_teams.toLocaleString()} teams${lb.bronze != null ? ` · bronze ${fmt(lb.bronze, 3)}` : ""} · ${ago(lb.ts)} ago` : "kx sync to fetch", L().leaderboard),
+    stat("", "Submissions today", String(sl.used), sl.limit ? `of ${sl.limit}` : null,
+      `resets in ${dur(sl.reset_in_s)}`, L().submissions),
+    stat("", "Running now", String(runs.length + workers.length), runs.length + workers.length === 1 ? "process" : "processes",
+      `${runs.length} run${runs.length === 1 ? "" : "s"} · ${workers.length} worker${workers.length === 1 ? "" : "s"} · ${st.tasks.counts.active} active, ${st.tasks.counts.open} open tasks`)));
+
+  const left = [], right = [];
+  if (hist.points.length || hist.protocols.length) {
+    left.push(h("h2", {}, "Score over time", h("span", { class: "h2sub" }, hist.protocol || "")));
+    const pts = hist.points.map(p => ({ x: parseInt(p.run.slice(1), 10), ...p }));
+    const byX = Object.fromEntries(pts.map(p => [p.x, p]));
+    const sel = hist.protocols.length > 1 ? h("div", { class: "filters", style: "margin:0 0 6px" }, h("select", { "aria-label": "Score protocol", onchange: e => { state.histProtocol = e.target.value; load(); } },
+      hist.protocols.map(p => h("option", { value: p.id, selected: p.id === hist.protocol || null }, `${p.id}${p.id === ref.id ? " (reference)" : ""} · ${p.n} run${p.n === 1 ? "" : "s"}`)))) : null;
+    left.push(h("div", { class: "card" }, sel, pts.length ? lineChart({
+      series: [{ name: "best so far", kind: "step", color: "var(--series-1)", points: pts.map(p => [p.x, p.best]), endLabel: p => `best ${fmt(p[1])}` },
+               { name: "each run", kind: "dots", color: "var(--context)", points: pts.map(p => [p.x, p.value]) }],
+      xFmt: v => rid(Math.round(v)), xLabel: "run", height: 170, title: "score over time",
+      tipTitle: x => { const p = byX[x]; return p ? `${p.run} · ${p.hypothesis || ""}`.slice(0, 140) : rid(x); } }) : h("div", { class: "empty" }, "No scored runs under this protocol.")));
+    left.push(...metricsOverTime(pts, byX));
+  }
+  if (lbd) left.push(...leaderboardCharts(lbd));
+  if (runs.length || workers.length) {
+    left.push(h("h2", {}, "Running"));
+    left.push(h("div", { class: "card flush" },
+      runs.length ? table([["run"], ["progress"], ["elapsed", "num"], ["hypothesis"]], runs.map(r => [h("span", { class: "id" }, r.run, r.host ? h("span", { class: "dim" }, ` @${r.host}`) : ""),
+        r.percent != null ? h("div", {}, h("div", { class: "progress" }, h("div", { style: `width:${r.percent}%` })), h("div", { class: "dim" }, `${r.percent.toFixed(0)}%${r.eta_s ? " · eta " + dur(r.eta_s) : ""}`)) : badge("running", "active"),
+        dur(r.elapsed_s), h("span", { class: "clamp" }, r.hypothesis || "")]), i => showRun(runs[i].run)) : null,
+      workers.length ? table([["worker"], ["task"], ["tokens", "num"], ["doing"]], workers.map(w => [badge(w.agent, "active"), h("span", { class: "id" }, `T${w.task}`), compact((w.tokens_in || 0) + (w.tokens_out || 0)), h("span", { class: "dim clamp" }, w.last_action || "")])) : null));
+  }
+  left.push(h("h2", {}, "Latest submissions", h("span", { class: "h2sub" }, ext(L().submissions, "on Kaggle", "Your submissions on Kaggle"))));
+  left.push(h("div", { class: "card flush" }, sub.recent.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "num"], [""]],
+    sub.recent.map(x => [h("span", { class: "id" }, x.id), x.run ? h("span", { class: "id" }, x.run) : h("span", { class: "dim" }, "external"), badge(x.status, SUB_KIND[x.status]), fmt(x.public), `${ago(x.created)} ago`,
+      x.winrate != null ? h("span", { class: "dim" }, `${x.decided} games · ${(x.winrate * 100).toFixed(1)}% won`) : (x.error ? h("span", { class: "dim clamp" }, x.error) : "")])) : h("div", { class: "empty" }, "No submissions yet.")));
+
+  const tl = [...st.tasks.active, ...st.tasks.ready];
+  right.push(h("h2", {}, "Tasks", h("span", { class: "h2sub" }, `${st.tasks.counts.active} active · ${st.tasks.counts.waiting} waiting · ${st.tasks.counts.open} open`)));
+  right.push(h("div", { class: "card flush" }, tl.length ?
+    table([["task"], ["title", "one"], ["state"]], tl.map(t => {
+      const note = t.status === "waiting" ? `waits on ${t.waiting_on}` : (t.last_note ? t.last_note.text : "");
+      return [h("span", { class: "id" }, `T${t.id}`),
+        h("span", { title: note ? `${t.title}\n${note}` : t.title }, h("span", { style: "font-weight:500" }, t.title), note ? h("span", { class: "dim" }, ` · ${note}`) : null),
+        badge(t.status === "open" ? "ready" : t.status, TASK_KIND[t.status])];
+    }),
+      i => showTask(tl[i].id)) : h("div", { class: "empty" }, "No active or ready tasks.")));
+  right.push(h("h2", {}, "Budgets"));
+  right.push(h("div", { class: "card" }, st.budgets.length ? st.budgets.map(b => {
+    const pct = b.cap ? Math.min(100, b.used / b.cap * 100) : 0;
+    const fill = pct >= 100 ? "var(--critical)" : pct >= 80 ? "var(--warning)" : "var(--series-1)";
+    return h("div", { class: "meter", title: b.frees_up }, h("div", { class: "row" }, h("span", { class: "name" }, b.key.replaceAll("_", " "), b.scope !== "team" ? h("span", { class: "dim" }, ` · ${b.scope}`) : null), h("span", { class: "sec" }, `${compact(b.used)} / ${compact(b.cap)}`)),
+      h("div", { class: "progress" }, h("div", { style: `width:${pct}%;background:${fill}` })));
+  }) : h("div", { class: "empty" }, "No budgets set (comp.yaml budgets:).")));
+  out.push(h("div", { class: "grid cols" }, h("div", {}, left), h("div", {}, right)));
+  return out;
+}
+
+// Metrics the scored runs report (r.log, logged_metrics.json), plotted over runs: whatever the runs report, picked here.
+const URL_METRICS = new URLSearchParams(location.search).get("metrics");  // ?metrics=a,b: a link to a picked view
+if (URL_METRICS != null) { try { localStorage.setItem(`kx-metrics:${COMP}`, JSON.stringify(URL_METRICS.split(",").filter(Boolean))); } catch (e) { } }
+function pickedMetrics() { try { return JSON.parse(localStorage.getItem(`kx-metrics:${COMP}`) || "[]"); } catch (e) { return URL_METRICS ? URL_METRICS.split(",") : []; } }
+function setPickedMetrics(v) { try { localStorage.setItem(`kx-metrics:${COMP}`, JSON.stringify(v)); } catch (e) { } }
+function metricsOverTime(pts, byX) {
+  const counts = {};
+  for (const p of pts) for (const k of Object.keys(p.metrics || {})) counts[k] = (counts[k] || 0) + 1;
+  const names = Object.keys(counts).filter(k => counts[k] >= 2).sort();
+  if (!names.length) return [];
+  const picked = pickedMetrics().filter(k => names.includes(k));
+  const toggle = k => { const cur = pickedMetrics(); setPickedMetrics(cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k]); load(); };
+  const out = [h("h2", {}, "Reported metrics", h("span", { class: "h2sub" }, "numbers the scored runs log (r.log); pick any to plot"))];
+  const card = h("div", { class: "card" });
+  if (picked.length) {
+    const series = picked.map((k, i) => ({ name: k, kind: "line", color: `var(--series-${(i % 6) + 1})`,
+      points: pts.filter(p => p.metrics && p.metrics[k] != null).map(p => [p.x, p.metrics[k]]), endLabel: p => `${k} ${fmt(p[1], 3)}` }));
+    card.append(lineChart({ series, xFmt: v => rid(Math.round(v)), xLabel: "run", height: 190, title: "reported metrics over runs",
+      tipTitle: x => { const p = byX[x]; return p ? `${p.run} · ${p.hypothesis || ""}`.slice(0, 140) : rid(x); } }));
+  }
+  const ordered = [...picked, ...names.filter(k => !picked.includes(k))];
+  const chips = ordered.map(k => h("button", { class: "chip", "data-name": k, "aria-pressed": picked.includes(k) ? "true" : "false", title: `${counts[k]} scored runs report ${k}`, onclick: () => toggle(k) }, k));
+  const filter = () => { const q = state.metricQuery.toLowerCase(); chips.forEach(c => { const k = c.dataset.name; c.hidden = !(picked.includes(k) || (q ? k.toLowerCase().includes(q) : names.length <= 12)); }); };
+  const search = names.length > 12 ? h("input", { type: "search", placeholder: `filter ${names.length} metrics`, value: state.metricQuery, "aria-label": "Filter metrics", style: "min-width:0;width:170px",
+    oninput: e => { state.metricQuery = e.target.value; filter(); } }) : null;
+  card.append(h("div", { class: "pick", role: "group", "aria-label": "Metrics to plot" }, h("span", { class: "dim" }, picked.length ? "plot:" : "Pick metrics to plot:"), search, chips));
+  filter();
+  out.push(card);
+  return out;
+}
+
+function leaderboardCharts(d) {
+  const out = [], cur = COMPS.find(x => x.slug === COMP) || {}, maxi = (cur.direction || "max") === "max";
+  const snap = d.snapshots.length ? d.snapshots[d.snapshots.length - 1] : null;
+  const syncBtn = h("button", { class: "btn", style: "margin-left:10px;font-size:12px;padding:1px 9px", title: "kx sync: submissions, scores and a leaderboard snapshot (read-only on Kaggle)", onclick: async e => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = "syncing…";
+    try { await api("sync", { method: "POST", headers: { "X-KX-Token": TOKEN, "Content-Type": "application/json" }, body: "{}" }); load(); }
+    catch (err) { b.disabled = false; b.textContent = "sync failed"; b.title = err.message; } } }, "Sync with Kaggle");
+  out.push(h("h2", {}, "Public leaderboard", h("span", { class: "h2sub" }, snap ? `${snap.n_teams.toLocaleString()} teams · synced ${ago(snap.ts)} ago` : "never synced", " · ", ext(L().leaderboard, "leaderboard")), syncBtn));
+  const subs = d.submissions.filter(x => x.public != null);
+  if (!subs.length && !snap) { out.push(h("div", { class: "card" }, h("div", { class: "empty" }, "No scored submissions yet."))); return out; }
+  let best = null;
+  const bestPts = subs.map(x => { best = best == null ? x.public : (maxi ? Math.max(best, x.public) : Math.min(best, x.public)); return [day(x.created), best]; });
+  if (snap && bestPts.length) bestPts.push([Math.max(day(snap.ts), bestPts[bestPts.length - 1][0]), best]);
+  // medal lines: #1 / gold / silver / bronze as recorded at each kx sync. Before the first sync, the range each can have
+  // had (d.bounds, from the latest leaderboard), else faint at the first recorded value; one snapshot: today's values
+  const LINES = [["#1", "top", "var(--ink-2)"], ["gold", "gold", "var(--warn-ink)"], ["silver", "silver", "var(--context)"], ["bronze", "bronze", "var(--muted)"]];
+  const withAll = d.snapshots.filter(x => x.top != null);
+  const asLines = withAll.length >= 2;
+  const firstSync = asLines ? day(withAll[0].ts) : null, x0 = subs.length ? day(subs[0].created) : firstSync;
+  const refs = !asLines && snap ? LINES.filter(([, k]) => snap[k] != null).map(([l, k, c]) => ({ y: snap[k], label: `${l} ${fmt(snap[k], 3)}`, color: c })) : [];
+  const bdays = ((d.bounds || {}).days || []).map(b => ({ ...b, x: day(b.day + "T00:00:00Z") + 1 }))  // a day's range holds at its end
+    .filter(b => b.x >= x0 && b.x < firstSync);
+  const medalSeries = asLines ? LINES.filter(([, k]) => withAll.some(x => x[k] != null)).flatMap(([l, k, c]) => {
+    const pts = withAll.filter(x => x[k] != null).map(x => [day(x.ts), x[k]]);
+    const line = { name: `${l} ${fmt(pts[pts.length - 1][1], 3)}`, kind: "step", dotted: true, color: c, thin: true, points: pts };  // a threshold holds until the next sync; latest value in the legend
+    const band = bdays.filter(b => b[k] && b[k][0] != null && b[k][1] != null).map(b => [b.x, b[k][0], b[k][1]]);
+    if (band.length) return [line, { name: `${l} range`, kind: "band", color: c, points: [...band, [pts[0][0], pts[0][1], pts[0][1]]] }];
+    return x0 < pts[0][0] ? [line, { name: l, kind: "step", dotted: true, color: c, thin: true, aside: true, points: [[x0, pts[0][1]], pts[0]] }] : [line];
+  }) : [];
+  const banded = medalSeries.some(sr => sr.kind === "band");
+  const byDay = Object.fromEntries(subs.map(x => [day(x.created), x]));
+  out.push(h("div", { class: "card" }, lineChart({
+    series: [{ name: "our best", kind: "step", color: "var(--series-1)", points: bestPts, endLabel: p => `best ${fmt(p[1], 3)}` },
+             { name: "our submissions", kind: "dots", color: "var(--context)", points: subs.map(x => [day(x.created), x.public]) }, ...medalSeries],
+    refs, xFmt: dayFmt, xTicks: dayTicks, xLabel: "date", height: 210, title: "public leaderboard score over time",
+    tipTitle: x => { const sb = byDay[x]; return sb ? `S${sb.id}${sb.run ? " · " + sb.run : ""} · ${dayFmt(x)}${sb.message ? " · " + sb.message.slice(0, 80) : ""}` : dayFmt(x); } })));
+  if (!asLines) out.push(h("div", { class: "dim", style: "font-size:12px;margin:4px 0 6px" }, "Medal lines are today's values; each sync records them, so they become lines over time."));
+  else if (x0 < firstSync) out.push(h("div", { class: "dim", style: "font-size:12px;margin:4px 0 6px" }, banded
+    ? `Medal lines are recorded at each sync since ${dayFmt(firstSync)}. Before that, each lay in its shaded range, worked out from teams that have not submitted since; the dotted edge is the ${maxi ? "lowest" : "highest"} it can have been. Each sync narrows the ranges.`
+    : `Medal lines are recorded at each sync since ${dayFmt(firstSync)}; fainter before that, at the first recorded value.`));
+
+  const row = h("div", { class: "grid", style: "grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:8px" });
+  const ranks = d.snapshots.filter(x => x.our_rank != null);
+  const snapByDay = Object.fromEntries(ranks.map(x => [day(x.ts), x]));
+  row.append(h("div", {}, h("h2", {}, "Our rank", h("span", { class: "h2sub" }, snap && snap.our_rank ? `#${snap.our_rank} of ${snap.n_teams.toLocaleString()} (top ${Math.max(1, Math.round(snap.our_rank / snap.n_teams * 100))}%)` : "")),
+    h("div", { class: "card" }, ranks.length ? lineChart({
+      series: [{ name: "rank", kind: "line", color: "var(--series-1)", points: ranks.map(x => [day(x.ts), x.our_rank]), endLabel: p => `#${p[1]}` }],
+      invertY: true, yFmt: v => `#${v}`, yTickFmt: v => `#${compact(v)}`, xFmt: dayFmt, xTicks: dayTicks, xLabel: "date", height: 170, title: "our rank over time",
+      tipTitle: x => { const sn = snapByDay[x]; return sn ? `${dayFmt(x)} · of ${sn.n_teams.toLocaleString()} teams` : dayFmt(x); } })
+      : h("div", { class: "empty" }, "Rank appears after a sync with a scored submission. Each sync adds a point."))));
+
+  const sel = h("select", { "aria-label": "Local protocol", onchange: e => { state.lbProtocol = e.target.value; load(); } },
+    d.protocols.map(p => h("option", { value: p.id, selected: p.id === d.protocol || null }, `${p.id}${d.reference && p.id === d.reference.id ? " (reference)" : ""} · ${p.n} run${p.n === 1 ? "" : "s"}`)));
+  const pairs = d.pairs;
+  const byX = {}; for (const p of pairs) (byX[p.local] = byX[p.local] || []).push(p);
+  const series = [{ name: "submitted runs", kind: "dots", color: "var(--series-1)", points: pairs.map(p => [p.local, p.public]) }];
+  if (d.fit && pairs.length >= 2) {
+    const lx = Math.min(...pairs.map(p => p.local)), hx = Math.max(...pairs.map(p => p.local));
+    series.push({ name: "fit", kind: "line", color: "var(--context)", points: [[lx, d.fit.intercept + d.fit.slope * lx], [hx, d.fit.intercept + d.fit.slope * hx]] });
+  }
+  const caption = d.fit ? `public ≈ ${fmt(d.fit.intercept, 3)} + ${fmt(d.fit.slope, 3)} × local${d.fit.r != null ? ` · r ${fmt(d.fit.r, 2)}` : ""} · ${pairs.length} runs`
+    : pairs.length === 1 ? `${pairs[0].run}: local ${fmt(pairs[0].local)} → public ${fmt(pairs[0].public, 3)}. The fit needs a second submitted run.` : "No submitted run has a score under this protocol.";
+  row.append(h("div", {}, h("h2", {}, "Local vs public"),
+    h("div", { class: "card" }, d.protocols.length ? h("div", { class: "filters", style: "margin:0 0 6px" }, sel) : null,
+      pairs.length ? lineChart({ series, xLabel: d.protocol ? d.protocol.split("@")[0] : "local", height: 170, title: "local score vs public leaderboard score", xPad: 0.05,
+        tipTitle: x => (byX[x] || []).map(p => `${p.run} · local ${fmt(p.local)} · public ${fmt(p.public, 3)}`).join(" | ") || fmt(x) }) : null,
+      h("div", { class: "dim", style: "font-size:12px;margin-top:4px" }, caption))));
+  out.push(row);
+  return out;
+}
+
+async function renderRuns() {
+  const protos = await api("protocols");
+  const sel = h("select", { "aria-label": "Protocol", onchange: e => { state.runsProtocol = e.target.value; load(); } },
+    h("option", { value: "" }, `reference: ${protos.reference.id || "none"}`),
+    protos.protocols.filter(p => !p.reference && !p.id.startsWith("kaggle:")).map(p => h("option", { value: p.id, selected: state.runsProtocol === p.id ? true : null }, `${p.id} (${p.scores})`)));
+  const mode = h("div", { class: "seg", role: "group", "aria-label": "View" },
+    [["board", "Ranked"], ["all", "All runs"]].map(([v, label]) => h("button", { "aria-pressed": state.runsMode === v ? "true" : "false", onclick: () => { state.runsMode = v; load(); } }, label)));
+  const q = h("input", { type: "search", placeholder: "filter (hypothesis, run, task, curve)", value: state.runsQuery, oninput: e => { state.runsQuery = e.target.value; filterRows(); } });
+  const bar = h("div", { class: "cmp-bar" });
+  paintSel = note => {
+    const n = state.compare.length;
+    bar.replaceChildren(...(n ? [h("span", { class: "dim" }, note || `${n} selected`), h("button", { class: "btn primary", onclick: showCompare }, n > 1 ? `Compare ${n} runs` : "Compare…"),
+      h("button", { class: "btn", onclick: () => { setSelection([]); syncPicks(); } }, "Clear")] : [h("span", { class: "dim" }, "tick runs to compare them")]));
+  };
+  paintSel();
+  const out = [h("div", { class: "filters" }, mode, state.runsMode === "board" ? sel : null, q, bar)];
+  const box = h("div", { class: "card flush" });
+  let rows = [], cells = [], ids = [];
+  if (state.runsMode === "board") {
+    const b = await api("board" + (state.runsProtocol ? `?protocol=${encodeURIComponent(state.runsProtocol)}` : ""));
+    rows = b.rows;
+    box.append(h("div", { class: "dim", style: "padding:8px 10px 2px" }, h("span", { class: "id dim" }, b.protocol), " · “vs #1” is a paired test on the per-fold breakdown"));
+    cells = rows.map(r => [pickBox(r.run), h("span", { class: "rank" }, r.rank), h("span", { class: "id" }, r.run), score(r.value, r.se), r.n ?? "", verdict(r.vs_best),
+      r.task ? h("span", { class: "id" }, `T${r.task}`) : "", h("span", { title: r.hypothesis || "" }, r.hypothesis || "")]);
+    ids = rows.map(r => r.run);
+    box.append(table([["", "sel"], ["#", "num"], ["run"], ["score", "num"], ["n", "num"], ["vs #1"], ["task"], ["hypothesis", "one"]], cells, i => showRun(ids[i])));
+  } else {
+    rows = await api("runs?n=300&curves=1");
+    const took = r => r.status === "running" ? dur((Date.now() - new Date(r.created)) / 1000) : (r.finished ? dur((new Date(r.finished) - new Date(r.created)) / 1000) : "");
+    const status = r => {
+      const p = r.progress;
+      if (!p || p.percent == null) return badge(r.status, RUN_KIND[r.status]);
+      return h("div", { class: "rprog", title: `${p.phase}${p.eta_s ? " · eta " + dur(p.eta_s) : ""}` }, badge(`${p.percent.toFixed(0)}%`, RUN_KIND[r.status]),
+        h("div", { class: "progress" }, h("div", { style: `width:${p.percent}%` })), p.eta_s ? h("span", { class: "dim" }, dur(p.eta_s)) : null);
+    };
+    const cols = [[["", "sel"], r => pickBox(r.run)], [["run"], r => h("span", { class: "id" }, r.run, r.host ? h("span", { class: "dim" }, ` @${r.host}`) : "")],
+      [["status"], status], [["started"], r => ago(r.created)], [["took", "num"], took], [["kind"], r => h("span", { class: "dim" }, r.kind)], [["by"], r => r.author || ""],
+      [["task"], r => r.task ? h("span", { class: "id" }, `T${r.task}`) : ""],
+      [["score", "num"], r => r.score ? score(r.score.value, r.score.se) : (r.other_score ? h("span", { class: "dim" }, `${fmt(r.other_score.value)} · ${r.other_score.protocol_id.split("@")[0]}`) : "")],
+      [["hypothesis", "one"], r => h("span", { title: r.hypothesis || "" }, r.hypothesis || "")]];
+    const used = cols.filter(([[name], f]) => !["task", "score", "kind", "by"].includes(name) || rows.some(r => { const v = f(r); return v !== "" && !(name === "kind" && r.kind === rows[0].kind) && !(name === "by" && r.author === rows[0].author); }));
+    cells = rows.map(r => used.map(([, f]) => f(r)));
+    ids = rows.map(r => r.run);
+    box.append(table(used.map(([c]) => c), cells, i => showRun(ids[i])));
+  }
+  function filterRows() {
+    const needle = state.runsQuery.toLowerCase();
+    box.querySelectorAll("tbody tr").forEach((tr, i) => {
+      const r = rows[i]; const text = `${r.run} ${r.hypothesis || ""} ${r.task ? "T" + r.task : ""} ${(r.curves || []).join(" ")}`.toLowerCase();
+      tr.style.display = !needle || text.includes(needle) ? "" : "none";
+    });
+  }
+  out.push(box);
+  setTimeout(filterRows);
+  return out;
+}
+
+function taskKind(t) { return t.status === "done" ? ({ positive: "good", negative: "critical", inconclusive: "neutral" }[t.result] || "good") : TASK_KIND[t.status]; }
+function taskBadge(t) { return badge(t.status + (t.result ? ` · ${t.result}` : ""), taskKind(t)); }
+function taskLatest(t) { return t.status === "waiting" ? `waits on ${t.waiting_on}` : (t.blocked_by && t.blocked_by.length ? `after ${t.blocked_by.join(", ")}` : (t.last_note ? t.last_note.text.slice(0, 160) : (t.outcome || "").slice(0, 160))); }
+
+async function renderTasks() {
+  const rows = await api("tasks" + (state.tasksAll ? "?all=1" : ""));
+  const mode = h("div", { class: "seg", role: "group", "aria-label": "View" },
+    [["list", "List"], ["graph", "Graph"]].map(([v, label]) => h("button", { "aria-pressed": state.tasksMode === v ? "true" : "false", onclick: () => { state.tasksMode = v; load(); } }, label)));
+  const out = [h("div", { class: "filters" }, mode, h("label", {}, h("input", { type: "checkbox", checked: state.tasksAll || null, onchange: e => { state.tasksAll = e.target.checked; load(); } }), " include done and dropped"))];
+  if (!rows.length) out.push(h("div", { class: "card" }, h("div", { class: "empty" }, "No open tasks. Add one: kx task add \"...\"")));
+  else if (state.tasksMode === "graph") out.push(h("div", { class: "card" }, taskGraph(rows)),
+    h("div", { class: "dim", style: "font-size:12px;margin-top:6px" }, "Each task sits right of the tasks it depends on; a dashed link is a dependency not done yet.",
+      state.tasksAll ? "" : " Done and dropped tasks are hidden, with their links."));
+  else out.push(h("div", { class: "card flush" }, table([["task"], ["p", "num"], ["state"], ["owner"], ["title"], ["latest", "one"]], rows.map(t => [h("span", { class: "id" }, `T${t.id}`), h("span", { class: "dim" }, `p${t.priority}`),
+    taskBadge(t), t.owner || "", h("span", { class: "wrap task-ttl", style: "font-weight:500" }, t.title), h("span", { class: "dim" }, taskLatest(t))]),
+    i => showTask(rows[i].id))));
+  return out;
+}
+
+// Dependency graph: a task's column is one past its deepest dependency. A link that skips columns passes through a
+// thin waypoint in each column it crosses, so it runs between cards, not behind them. Within a column, cards and
+// waypoints are ordered by the mean position of their neighbours (a few sweeps each way) to keep links from crossing.
+const KIND_COLOR = { good: "var(--good)", warning: "var(--warning)", critical: "var(--critical)", active: "var(--accent)", neutral: "var(--axis)" };
+function taskGraph(rows) {
+  const byId = Object.fromEntries(rows.map(t => [t.id, t]));
+  const deps = t => (t.depends || []).filter(d => byId[d] && d !== t.id);
+  const layer = {};
+  const depth = (t, path = new Set()) => {
+    if (layer[t.id] != null) return layer[t.id];
+    if (path.has(t.id)) return 0;  // a cycle: cut it here
+    path.add(t.id);
+    const ds = deps(t);
+    const v = ds.length ? 1 + Math.max(...ds.map(d => depth(byId[d], path))) : 0;
+    path.delete(t.id);
+    return (layer[t.id] = v);
+  };
+  rows.forEach(t => depth(t));
+  // nodes: tasks (by id) and waypoints ("w<from>-<to>-<col>"); links: chains of nodes from a dependency to its task
+  const col = { ...layer }, preds = {}, succs = {}, links = [];
+  const join = (a, b) => { (succs[a] = succs[a] || []).push(b); (preds[b] = preds[b] || []).push(a); };
+  for (const t of rows) for (const d of deps(t)) {
+    if (layer[d] >= layer[t.id]) continue;  // only where a cycle was cut
+    const chain = [d];
+    for (let c = layer[d] + 1; c < layer[t.id]; c++) { const w = `w${d}-${t.id}-${c}`; col[w] = c; chain.push(w); }
+    chain.push(t.id);
+    for (let i = 1; i < chain.length; i++) join(chain[i - 1], chain[i]);
+    links.push({ chain, open: byId[d].status !== "done" });
+  }
+  const cols = []; Object.keys(col).forEach(k => { const id = byId[k] ? +k : k; (cols[col[k]] = cols[col[k]] || []).push(id); });
+  const pos = {}, place = c => c.forEach((id, i) => { pos[id] = i; });
+  const rank = id => typeof id === "number" ? id : parseFloat(id.slice(1));
+  cols.forEach(c => { c.sort((a, b) => rank(a) - rank(b)); place(c); });
+  const mean = (id, ns) => ns && ns.length ? ns.reduce((acc, n) => acc + pos[n], 0) / ns.length : pos[id];
+  for (let pass = 0; pass < 6; pass++) {
+    const fwd = pass % 2 === 0;
+    for (const c of fwd ? cols.slice(1) : cols.slice(0, -1).reverse()) {
+      const key = Object.fromEntries(c.map(id => [id, mean(id, fwd ? preds[id] : succs[id])]));
+      c.sort((a, b) => key[a] - key[b] || rank(a) - rank(b)); place(c);
+    }
+  }
+  const NW = 200, NH = 66, WH = 10, GX = 48, GY = 12, hgt = id => byId[id] ? NH : WH;
+  const colH = c => c.reduce((acc, id) => acc + hgt(id), 0) + (c.length - 1) * GY;
+  const W = cols.length * NW + (cols.length - 1) * GX, H = Math.max(...cols.map(colH));
+  const at = {};
+  cols.forEach((c, i) => { let y = (H - colH(c)) / 2; for (const id of c) { at[id] = { x: i * (NW + GX), y, mid: y + hgt(id) / 2 }; y += hgt(id) + GY; } });
+  const svg = s("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, "aria-hidden": "true" });
+  for (const { chain, open } of links) {
+    const color = open ? "var(--warning)" : "var(--axis)";
+    let d = `M${at[chain[0]].x + NW},${at[chain[0]].mid}`, x = at[chain[0]].x + NW, y = at[chain[0]].mid;
+    chain.slice(1).forEach((id, i) => {
+      const last = i === chain.length - 2, tx = at[id].x - (last ? 7 : 0), ty = at[id].mid, mx = (x + tx) / 2;
+      d += ` C${mx},${y} ${mx},${ty} ${tx},${ty}`;
+      if (!last) d += ` H${at[id].x + NW}`;  // straight through the waypoint's column
+      x = last ? tx : at[id].x + NW; y = ty;
+    });
+    svg.append(s("path", { d, fill: "none", stroke: color, "stroke-width": 1.5, "stroke-dasharray": open ? "4 3" : null }));
+    const e = at[chain[chain.length - 1]], ex = e.x - 1;
+    svg.append(s("path", { d: `M${ex - 7},${e.mid - 4} L${ex},${e.mid} L${ex - 7},${e.mid + 4} Z`, fill: color }));
+  }
+  const g = h("div", { class: "tg", style: `width:${W}px;height:${H}px` }, svg);
+  for (const t of rows) {
+    const note = taskLatest(t);
+    g.append(h("button", { class: `tg-node ${t.status}`, style: `left:${at[t.id].x}px;top:${at[t.id].y}px;width:${NW}px;height:${NH}px;--kc:${KIND_COLOR[taskKind(t)] || "var(--axis)"}`,
+      title: note ? `${t.title}\n${note}` : t.title, onclick: () => showTask(t.id) },
+      h("span", { class: "t" }, t.title), h("span", { class: "m" }, h("span", { class: "id" }, `T${t.id}`), taskBadge(t), t.owner ? h("span", { class: "dim" }, t.owner) : null)));
+  }
+  return h("div", { class: "tg-wrap" }, g);
+}
+
+async function renderFindings() {
+  const rows = await api("findings" + (state.findAll ? "?all=1" : "") + (state.findTag ? `${state.findAll ? "&" : "?"}tag=${encodeURIComponent(state.findTag)}` : ""));
+  const tags = [...new Set(rows.flatMap(f => f.tags))].sort();
+  const out = [h("div", { class: "filters" }, h("label", {}, h("input", { type: "checkbox", checked: state.findAll || null, onchange: e => { state.findAll = e.target.checked; load(); } }), " include withdrawn and superseded"),
+    h("select", { "aria-label": "Tag", onchange: e => { state.findTag = e.target.value; load(); } }, h("option", { value: "" }, "all tags"), [...new Set([...tags, state.findTag].filter(Boolean))].map(t => h("option", { value: t, selected: t === state.findTag || null }, t))))];
+  const FKIND = { open: "active", confirmed: "good", withdrawn: "neutral", superseded: "neutral" };
+  out.push(h("div", { class: "card", style: "padding:4px 18px" }, rows.length ? rows.map(f => h("div", { class: "finding" },
+    h("div", { class: "head" }, h("span", { class: "id", style: "font-weight:600" }, `F${f.id}`), badge(f.status, FKIND[f.status]), f.tags.map(t => h("span", { class: "chip" }, t)),
+      h("span", { class: "dim", style: "font-size:12px" }, `${ago(f.ts)} ago · ${f.author || ""}`)),
+    h("div", { class: "wrap" }, f.text),
+    f.evidence.length ? h("div", { style: "margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;align-items:center" }, h("span", { class: "dim", style: "font-size:12px;margin-right:2px" }, "evidence"), f.evidence.map(e => h("button", { class: "btn small", onclick: () => showRun(rid(e)) }, rid(e)))) : null)) : h("div", { class: "empty" }, "No findings.")));
+  return out;
+}
+
+async function renderSubs() {
+  const d = await api("subs?n=50");
+  const out = [];
+  const sl = d.slots, lad = sl.ladder;
+  out.push(h("div", { class: "grid tiles", style: "grid-template-columns:repeat(auto-fit,minmax(220px,1fr))" }, h("div", { class: "card tile" }, h("div", { class: "label" }, "Today"), h("div", { class: "value" }, sl.limit ? `${sl.used} / ${sl.limit}` : String(sl.used)), h("div", { class: "sub" }, `resets in ${dur(sl.reset_in_s)}`)),
+    lad ? h("div", { class: "card tile" }, h("div", { class: "label" }, "Ladder"), h("div", { class: "value" }, `${lad.active} playing`),
+      h("div", { class: "sub" }, lad.out ? `a new one retires S${lad.out.id} (${lad.out.episodes || 0}/${lad.need} games)` : "room for a new one")) : null));
+  out.push(h("h2", {}, "Submissions", h("span", { class: "h2sub" }, ext(L().submissions, "your submissions on Kaggle"), L().leaderboard ? " · " : null, ext(L().leaderboard, "leaderboard"))));
+  out.push(h("div", { class: "card flush" }, d.submissions.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "nowrap"], ["by"], ["games"], ["why / error", "one"]],
+    d.submissions.map(s => [h("span", { class: "id" }, `S${s.id}`), s.run_id ? h("span", { class: "id" }, rid(s.run_id)) : h("span", { class: "dim" }, "external"), badge(s.status, SUB_KIND[s.status]), fmt(s.public), `${ago(s.created)} ago`, s.actor || "",
+      s.games && s.games.winrate != null ? `${s.games.win + s.games.loss + s.games.tie} · ${(s.games.winrate * 100).toFixed(1)}%` : (s.episodes ? `${s.episodes}` : ""),
+      h("span", { class: "dim", title: s.error || s.why || s.message || "" }, s.error || s.why || s.message || "")]), i => showSub(d.submissions[i])) : h("div", { class: "empty" }, "No submissions yet.")));
+  return out;
+}
+
+const RENDER = { status: renderStatus, training: renderTraining, runs: renderRuns, tasks: renderTasks, findings: renderFindings, subs: renderSubs };
+const main = document.getElementById("main");
+let loading = false, loadAgain = false, lastLoad = 0;
+const drawn = new Map();  // "comp tab" -> what that tab last showed: shown again at once while it refreshes
+async function load() {
+  if (loading) { loadAgain = true; return; }  // asked meanwhile (another tab, a filter): once this one ends
+  loading = true;
+  const tab = TAB, comp = COMP, current = () => tab === TAB && comp === COMP;
+  main.classList.add("stale");
+  try {
+    const nodes = (await RENDER[tab]()).flat(Infinity).filter(Boolean);
+    if (current()) {
+      const y = window.scrollY, f = document.activeElement;
+      const keep = f && main.contains(f) && f.dataset.keep ? [f.dataset.keep, f.selectionStart, f.selectionEnd] : null;  // typing in it as it refreshes
+      const scrolls = [...main.querySelectorAll("[data-scroll]")].map(el => [el.dataset.scroll, el.scrollTop]);  // a panel that scrolls itself
+      main.replaceChildren(...nodes);
+      for (const [k, top] of scrolls) { const el = main.querySelector(`[data-scroll="${k}"]`); if (el) el.scrollTop = top; }
+      const again = keep && main.querySelector(`[data-keep="${keep[0]}"]`);
+      if (again) { again.focus({ preventScroll: true }); try { again.setSelectionRange(keep[1], keep[2]); } catch (e) { } }
+      window.scrollTo(0, y);
+      drawn.set(`${comp} ${tab}`, nodes);
+      lastLoad = Date.now();
+    }
+  } catch (e) { if (current()) main.replaceChildren(errBox(e)); }
+  finally {
+    main.classList.remove("stale"); loading = false; tickUpdated();
+    if (loadAgain || !current()) { loadAgain = false; load(); }
+  }
+}
+function tickUpdated() { document.getElementById("updated").textContent = lastLoad ? `updated ${dur((Date.now() - lastLoad) / 1000)} ago` : ""; }
+function setTab(t) {
+  const open = drawer.classList.contains("open") && location.hash.split("/")[1];  // a drawer opened from a link keeps it
+  TAB = t; main.classList.toggle("wide", t === "training"); history.replaceState(null, "", `?comp=${encodeURIComponent(COMP)}#${t}${open ? "/" + open : ""}`);
+  document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === t ? "true" : "false"));
+  main.replaceChildren(...(drawn.get(`${COMP} ${t}`) || [])); syncPicks(); load();
+}
+const tabs = document.getElementById("tabs");
+for (const [id, label] of TABS) tabs.append(h("button", { role: "tab", "data-tab": id, "aria-selected": id === TAB ? "true" : "false", onclick: () => setTab(id) }, label));
+document.getElementById("refresh").addEventListener("click", () => drawer.classList.contains("open") ? refreshDrawer() : load());
+document.getElementById("theme").addEventListener("click", () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("kx-theme", next); } catch (e) { }
+});
+try { const t = localStorage.getItem("kx-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { }
+function renderLinks() {
+  const l = L(), c = COMPS.find(x => x.slug === COMP) || {}, box = document.getElementById("klinks");
+  const ours = [ext(l.kernel, "Our notebook", l.kernel), ...(c.datasets || []).map(d => ext(d.url, `Dataset ${d.ref.split("/")[1]}`, d.url))].filter(Boolean);
+  box.replaceChildren(...[ext(l.competition, "Overview"), ext(l.leaderboard, "Leaderboard"), ext(l.submissions, "Our submissions"), ext(l.discussion, "Discussion"),
+    ext(l.code, "Public notebooks"), ext(l.data, "Data"), ext(l.rules, "Rules")].filter(Boolean), ours.length ? h("div", { class: "sep" }) : null, ...ours);
+  document.getElementById("kmenu").hidden = !l.competition;
+}
+document.addEventListener("click", e => { const m = document.getElementById("kmenu"); if (m.open && !m.contains(e.target)) m.open = false; });
+document.addEventListener("keydown", e => { const m = document.getElementById("kmenu"); if (e.key === "Escape" && m.open) { m.open = false; m.querySelector("summary").focus(); } });
+api("comps").then(cs => {
+  COMPS = cs; renderLinks();
+  const sel = document.getElementById("comp");
+  const sub = document.getElementById("compsub");
+  const describe = () => { const c = cs.find(x => x.slug === COMP); sub.textContent = c && c.kind ? [c.title !== c.slug ? c.title : null, `${c.kind} · ${c.mode} · ${c.metric} (${c.direction})`, c.days_left != null ? (c.days_left >= 0 ? `${Math.round(c.days_left)} days left` : "ended") : null].filter(Boolean).join(" · ") : ""; };
+  for (const c of cs) sel.append(h("option", { value: c.slug, selected: c.slug === COMP || null }, c.slug));
+  describe();
+  document.title = `${COMP} · kx`;
+  sel.addEventListener("change", e => { COMP = e.target.value; resetCompare(); loadSelection(); describe(); renderLinks(); document.title = `${COMP} · kx`; closeDrawer(); setTab(TAB); });
+}).catch(() => { }).finally(() => setTab(TABS.some(([id]) => id === TAB) ? TAB : "status"));  // first render once the links are known
+setInterval(() => {
+  if (!document.hidden) {
+    if (drawer.classList.contains("open")) {
+      if (drawerState?.live && Date.now() - drawerState.updated > 15000) refreshDrawer();
+    } else if (Date.now() - lastLoad > (TAB === "training" && !ws.live ? 60000 : 15000)) load();  // nothing running: its charts stand still
+  }
+  tickUpdated();
+}, 5000);
+const deep = location.hash.slice(1).split("/")[1];
+loadSelection();
+if (deep) { const [k, v] = deep.split("="); if (k === "run") showRun(v); if (k === "task") showTask(v); if (k === "compare") { setSelection(v.split(",").filter(Boolean)); showCompare(); } }
+</script>
+</body>
+</html>

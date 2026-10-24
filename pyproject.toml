@@ -1,0 +1,21 @@
+[project]
+name = "kx"
+version = "2.0.0"
+description = "The ledger and Kaggle interface of a competition: runs, scores, tasks, findings, submissions"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6",
+]
+
+[project.scripts]
+kx = "kx.cli.main:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kx"]
