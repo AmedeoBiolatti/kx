@@ -15,13 +15,21 @@ confirmation · `4` over a budget or Kaggle limit · `5` not comparable.
 
 ## Setup
 
+You need git, [uv](https://docs.astral.sh/uv/), the Kaggle CLI logged in (`uv tool install kaggle`, then
+`kaggle auth login`), and rclone if you share a project between machines or use mailbox hosts.
+
 ```bash
 git clone https://github.com/AmedeoBiolatti/kx && uv tool install --editable kx    # the kx command
 mkdir <competition-slug> && cd $_       # next to kx: competition repos sit beside it
 kx init                 # git repo, comp.yaml, docs, code skeleton, pyproject.toml, data
 uv sync && git add -A && git commit -m init
-kx doctor
+kx doctor               # Kaggle CLI and login, git, data, docs, the workers' harnesses
 ```
+
+Each machine names itself in `~/.config/kx/machine.yaml`: `name: laptop` (default: its host name; two machines
+must not share one), and `share: gdrive:kx` to share projects with your other machines and people (see
+[The ledger](#the-ledger-machines-and-people)). `git pull` in the kx folder updates kx; then `kx init` in each
+competition repo updates its `docs/kx.md`, the rules agents read.
 
 A competition repo then looks like this:
 
@@ -66,19 +74,27 @@ Any other command: `kx exec -H "hypothesis" [--probe] [--gpus 1] -- ./train.sh` 
 - Runs are `r0012-fluent-sun`: a number and a name, like wandb's (tasks `T7-quiet-otter`, findings `F3-…`,
   submissions `S5-…`). `r12`, `12` or `fluent-sun` find it.
 - `kx task start T7` links the runs you start to T7 until it is done.
-- The dashboard's Training tab works like wandb: the runs that log curves on the left (state, when, how long, host,
-  score; filter, or order by the curves they share), and the curves of up to 8 shown runs overlaid on the right,
-  grouped by prefix (`train/`, `val_`), then their scores with `kx compare`'s verdict against a baseline, metrics, and
-  what differs in config and code. `#training/compare=r12,r15` links to it; ticking runs in the Runs tab or
-  "Compare…" on a run opens it with them. x can be the step, the time since start, or a counter the runs log
-  (samples, epochs), which lines up runs that count steps differently; drag across a chart to zoom (double-click
-  goes back). "Mean of repeats" draws runs with the same code, command and config but for the seed as one line
-  with their range shaded ("+N repeats" on a run adds them).
+- To compare runs well, put every setting in `config=` and the seed in `seed=`, and log curves with a counter
+  beside them (`r.step(i, loss=..., samples=n)`).
+
+## Dashboard
+
+`kx dashboard` serves a local page (Status, Training, Runs, Tasks, Findings, Submissions) over the same data as
+`--json`.
+
+- **Training** works like wandb: the runs that log curves on the left (state, when, how long, host, score; filter,
+  or order by the curves they share), and the curves of up to 8 shown runs overlaid on the right, grouped by prefix
+  (`train/`, `val_`), then their scores with `kx compare`'s verdict against a baseline, metrics, and what differs in
+  config and code. x is the step, the time since start, or a counter the runs log (samples, epochs), which lines up
+  runs that count steps differently; drag across a chart to zoom (double-click goes back). "Mean of repeats" draws
+  runs with the same code, command and config but for the seed as one line with their range shaded ("+N repeats"
+  on a run adds them). `#training/compare=r12,r15` links to it; ticking runs in the Runs tab or "Compare…" on a run
+  opens it with them.
+- **Runs** works like mlflow: every run with columns of its config keys and reported metrics (pick them under
+  Columns), sorted by any column, and any two numbers plotted against each other (a setting against the score).
 - Curves come from the whole of `metrics.jsonl`, cut for drawing to the first, last, lowest and highest point of
   each stretch of the run and both sides of every restart (`kx show R --curves` gives the same); a running run's
   chart fetches only what is new, every 5 seconds.
-- The Runs tab works like mlflow's: every run with columns of its config keys and reported metrics (pick them under
-  Columns), sorted by any column, and any two numbers plotted against each other (a setting against the score).
 
 ## Remote runs
 
@@ -199,6 +215,19 @@ FILE` takes one in, to move a project without a shared folder or to add a second
 finding and submission keeps its number and gets a name (`r0012` becomes `r0012-<name>`), and the run folders are
 renamed to match. `kx import PATH` does the same for another store or repo, taking its runs' kx files.
 
+### Moving a project from kx v2
+
+A v2 project keeps its ledger in `.kx/store/ledger.sqlite`; v3 never changes that file, so it stays as a fallback.
+
+1. Let remote runs in flight finish, and stop the agents and workers on every machine: what v2 writes after the
+   import does not reach v3.
+2. Install v3 on every machine (`git pull` in the kx folder; `kx` on PATH is what workers call), each with its own
+   `name:` in `~/.config/kx/machine.yaml`.
+3. On one machine only, the one with the fullest ledger: `kx import` in the repo, then `kx init` (rewrites
+   `docs/kx.md` for v3) and commit it. Compare `kx status` with what v2 showed.
+4. `kx sync` there, then on the other machines.
+5. Restart mailbox hosts' agents (`kx remote setup HOST` prints the start command).
+
 ## Tasks and findings
 
 ```bash
@@ -299,7 +328,9 @@ src/kx/
 tests/          one file per area
 ```
 
-The design and why kx works this way: [docs/v2.md](docs/v2.md); where it is going: [docs/collab.md](docs/collab.md).
+How the shared ledger works is in [The ledger](#the-ledger-machines-and-people) and
+[docs/collab.md](docs/collab.md) (also where kx is going); why kx is a ledger rather than an autopilot is in
+[docs/v2.md](docs/v2.md).
 The older autopilot version is tag `v1`.
 
 ## Privacy

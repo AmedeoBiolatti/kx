@@ -57,7 +57,24 @@ with kx.run("what this run tests", config=cfg, seed=cfg["seed"], tags=["algorith
   `kx.Protocol`). One protocol is the **reference**: `kx board`, `kx status` and `kx context` rank under it
   (`kx protocol list`, `kx protocol use NAME`). Scoring under a new name is a side evaluation. Never edit the
   reference protocol to make a run look better; re-score older runs when it has to change (`kx.score(run, ...)`).
+- **Log so runs can be compared**: the dashboard lines runs up in columns and charts.
+  - Every setting goes in `config=` (nested dicts are fine) and the seed in `seed=`. They become the runs table's
+    columns, and runs that differ only in their seed are drawn as one line with their range.
+  - Curves: `r.step(i, loss=..., val_auc=..., samples=n_seen)`, with a counter (samples, epoch) beside the values,
+    so runs that count steps differently line up on it. `r.progress(...)` with values logs them too.
+  - Final numbers: `r.log(train_time_s=..., peak_mem_gb=...)`.
 - `kx compare A B` (paired test on the breakdown), `kx show R`, `kx runs`, `kx board`, `kx search WORDS`.
+  `kx show R --json --curves` gives a run's curves cut to their shape (each stretch's first, last, lowest and
+  highest point); every point is in `metrics.jsonl` under `kx path R`.
+
+## Other machines
+
+Other machines and people share this ledger through `kx sync`: it sends what this machine wrote, brings theirs, then
+fetches Kaggle results (read-only). An agent working with a person runs it before `kx context` when starting a task
+and after finishing one, so the others see its runs and findings. Workers (`KX_AGENT` set) leave syncing to the person:
+their sandbox hides rclone's login. If `kx status` says this machine lost a task's claim (another machine started
+it first), stop working on that task: a `kx task done` or `wait` from here no longer changes it. In anything others
+read, write full ids (see below).
 
 ## Tasks and findings
 
