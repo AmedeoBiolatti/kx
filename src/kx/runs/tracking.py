@@ -357,14 +357,31 @@ def _no_ledger(what: str):
 
 
 def _attach(store: Store, run_id: str, hypothesis, config, seed, group):
-    """What kx.run says about the run of the kx exec it runs in, where kx exec left it empty."""
-    if seed is None and isinstance(config, dict):
-        seed = config.get("seed")
+    """What kx.run says about the run of the kx exec it runs in, where kx exec left it empty; a config adds to the
+    one there (keys of both: this one's)."""
+    if seed is None and isinstance(config, dict) and isinstance(config.get("seed"), int):
+        seed = config["seed"]
     row = store.get_run(run_id)
-    values = {k: v for k, v in (("hypothesis", hypothesis), ("config", dumps(config)), ("seed", seed), ("grp", group))
-              if v is not None and row[k] is None}
+    old = loads(row["config"])
+    if isinstance(old, dict) and isinstance(config, dict):
+        config = {**old, **config}
+    values = {k: v for k, v in (("hypothesis", hypothesis), ("seed", seed), ("grp", group)) if v is not None and row[k] is None}
+    if config is not None and config != old:
+        values["config"] = dumps(config)
     if values:
         store.update("runs", values, id=run_id)
+
+
+def merge_config(r: Run, config: dict):
+    """Add to a run's config (what kx.capture saw wandb or MLflow given); a seed in it becomes the run's seed."""
+    if isinstance(r, FileRun):
+        path = r.dir / "attach.json"
+        a = json.loads(path.read_text()) if path.exists() else {}
+        a["config"] = {**(a.get("config") or {}), **config}
+        atomic_json(path, a)
+        return
+    with r.store.transaction():
+        _attach(r.store, r.id, None, config, None, None)
 
 
 def current_run() -> Run | None:
@@ -390,13 +407,21 @@ def run(hypothesis: str, config: dict | None = None, *, parent=None, tags=(), gr
     """
     outer = current_run()
     if isinstance(outer, FileRun):
-        atomic_json(outer.dir / "attach.json", {"hypothesis": hypothesis, "config": config, "seed": seed, "group": group,
-                                                "tags": list(tags)})
+        from kx import capture
+        path = outer.dir / "attach.json"
+        had = (json.loads(path.read_text()) if path.exists() else {}).get("config")  # what capture saw already
+        if isinstance(had, dict) and isinstance(config, dict):
+            config = {**had, **config}
+        atomic_json(path, {"hypothesis": hypothesis, "config": config if config is not None else had, "seed": seed,
+                           "group": group, "tags": list(tags)})
+        capture.install()
         yield outer
         return
     if remote():
         _no_ledger("kx.run outside kx exec --on")
     if outer is not None:
+        from kx import capture
+        capture.install()
         st = outer.store
         _attach(st, outer.id, hypothesis, config, seed, group)
         st.add_tags(outer.id, tags)
@@ -405,15 +430,19 @@ def run(hypothesis: str, config: dict | None = None, *, parent=None, tags=(), gr
         finally:
             st.close()
         return
-    from kx import sandbox
+    from kx import capture, sandbox
     sandbox.no_local_runs("kx.run")
     act = begin(hypothesis, config, parent=parent, tags=tags, group=group, seed=seed, kind=kind)
+    capture.set_active(act.run)  # what the code logs to wandb or MLflow meanwhile goes to this run too
+    capture.install()
     try:
         yield act.run
     except BaseException as e:
+        capture.set_active(None)
         end(act, e)
         raise
     else:
+        capture.set_active(None)
         end(act)
 
 

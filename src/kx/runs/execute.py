@@ -108,6 +108,12 @@ def project_python_env(env: dict, cwd: Path | None) -> dict:
     return env
 
 
+def with_capture(env: dict) -> dict:
+    """The run's Python processes record what they log to wandb or MLflow (kx.capture), through a sitecustomize."""
+    from kx.capture import SITE
+    return {**env, "PYTHONPATH": os.pathsep.join([str(SITE), *([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])])}
+
+
 SILENT_RUN_S = 120  # a run longer than this without progress gets a hint
 
 
@@ -130,6 +136,7 @@ def run_command(cmd: list[str], *, hypothesis: str | None = None, kind: str = "e
                          kind=kind, command=cmd, gpus=gpus)
     r = act.run
     env = project_python_env({**os.environ, "KX_RUN_ID": str(r.id), "KX_RUN_DIR": str(r.dir)}, None)
+    env = with_capture(env)
     code, error = None, None
     began = time.monotonic()
     try:

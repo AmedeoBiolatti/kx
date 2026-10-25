@@ -96,6 +96,25 @@ Any other command: `kx exec -H "hypothesis" [--probe] [--gpus 1] -- ./train.sh` 
   each stretch of the run and both sides of every restart (`kx show R --curves` gives the same); a running run's
   chart fetches only what is new, every 5 seconds.
 
+## wandb and MLflow
+
+Code that already logs to wandb or MLflow needs no change: under `kx exec` (here or `--on` a host) and inside
+`kx.run`, what it logs is recorded in its kx run too.
+
+| the code calls | kx records |
+|---|---|
+| `wandb.init(config=..., tags=..., notes=...)`, `wandb.config.update` | the run's config (a `seed` in it becomes the run's seed), tags as `wandb_tags`, notes as a note |
+| `wandb.log({...})`, `run.log(..., step=)` | curve points: nested dicts as `a/b`, numbers only; without `step`, wandb's own counter (`commit=False` stays on the step) |
+| `mlflow.log_param(s)`, autolog's params | the run's config, `"4"` back to `4` |
+| `mlflow.log_metric(s)`, autolog's metrics | curve points; MLflow logs a metric without a step at 0, so kx counts that metric's points instead |
+| the run's end (`wandb.finish`, `mlflow.end_run`, or the process exiting) | the last value of each metric (and wandb's summary) as the run's metrics; a metric logged once is a metric, not a curve |
+
+wandb is switched off while it is captured (`mode="disabled"`: no service, nothing sent), unless `KX_WANDB=also`.
+MLflow keeps its own copy where `MLFLOW_TRACKING_URI` points, and without one in the run's dir (`mlflow.db`, or
+`mlruns/` without SQLAlchemy), never in the repo. Images, tables and artifacts stay with the library. `KX_CAPTURE=off`
+turns capture off. Each library is an adapter in `kx/capture/` speaking the same four things (config, step, summary,
+note): another library is another adapter.
+
 ## Remote runs
 
 Run on another machine (a laptop on the same network, a rented GPU) over ssh; the ledger stays here.
@@ -316,6 +335,7 @@ src/kx/
   ledger/       comp.yaml (config), the logs and their SQLite cache (store), ids (names), kx sync and export
                 (sync), old ledgers in (port)
   runs/         kx.run, kx exec, protocols, compare, progress and curves, run objects
+  capture/      what code logs to wandb / MLflow, recorded in its run (one adapter per library, an import hook)
   remote/       hosts (ssh, mailbox), run.sh, kx exec --on (ship, launch, copy back, record), the mailbox agent
   board/        tasks and findings
   kaggle/       the Kaggle CLI client, competition pages, data, submissions, kernels, ladder

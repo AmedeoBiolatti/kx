@@ -66,6 +66,8 @@ def run_sh(h, run_id: str, name: str, *, cmd: list[str], cwd: str, data_version:
         lines += ['C="$R/code"', *env_lines(*env, h.torch)]
     # the project's own package is not installed (environments are shared by runs of different commits)
     lines.append('export PYTHONPATH="$R/code/src${PYTHONPATH:+:$PYTHONPATH}"')
+    if not h.python:  # what the run logs to wandb or MLflow is recorded too (kx.capture), from the kx sources there
+        lines.append('export PYTHONPATH="$(cd "$B/.." && pwd)/kx/src/kx/capture/site:$PYTHONPATH"')
     lines.append("export " + " ".join(f"{k}={q(v)}" for k, v in exports.items()) + ' KX_RUN_DIR="$R/out"')
     if data_version:
         lines.append(f'export KX_DATA_DIR="$B/data/{data_version}"')

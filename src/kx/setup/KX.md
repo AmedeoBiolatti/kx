@@ -63,6 +63,9 @@ with kx.run("what this run tests", config=cfg, seed=cfg["seed"], tags=["algorith
   - Curves: `r.step(i, loss=..., val_auc=..., samples=n_seen)`, with a counter (samples, epoch) beside the values,
     so runs that count steps differently line up on it. `r.progress(...)` with values logs them too.
   - Final numbers: `r.log(train_time_s=..., peak_mem_gb=...)`.
+  - Code that logs to wandb or MLflow is recorded as it is (under `kx exec` and inside `kx.run`): keep it, do not
+    log the same numbers twice. wandb sends nothing from a kx run unless `KX_WANDB=also`. Scores still need
+    `r.score(...)` (or `scores.json`): a logged `val_auc` is a metric, not a score under a protocol.
 - `kx compare A B` (paired test on the breakdown), `kx show R`, `kx runs`, `kx board`, `kx search WORDS`.
   `kx show R --json --curves` gives a run's curves cut to their shape (each stretch's first, last, lowest and
   highest point); every point is in `metrics.jsonl` under `kx path R`.
