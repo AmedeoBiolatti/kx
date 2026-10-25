@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 
 from kx.ledger.config import KxError
-from kx.ledger.store import Store, now, rid
+from kx.ledger.store import Store, now
 
 SMOKE_TIMEOUT_S = 1800
 
@@ -43,39 +43,50 @@ def members(path: Path) -> list[dict] | None:
     return None
 
 
-def build(store: Store, run_id: int, file: str | None = None, actor: str | None = None):
+def file(store: Store, art) -> Path:
+    """Where an artifact is on this machine (the ledger has its path in the store, the same everywhere)."""
+    return store.comp.store / art["path"]
+
+
+def build(store: Store, run_id: str, file_: str | None = None, actor: str | None = None):
     """Snapshot the run's submission file into <store>/artifacts/<sha12>/ (read-only); idempotent."""
     run = store.get_run(run_id)
     if run["status"] != "done":
-        raise KxError(f"{rid(run_id)} is {run['status']}, not done")
-    name = file or store.comp.submission.get("file", "submission.csv")
+        raise KxError(f"{run_id} is {run['status']}, not done")
+    name = file_ or store.comp.submission.get("file", "submission.csv")
     src = store.run_dir(run_id) / name
     if not src.is_file():
         raise KxError(f"{src} does not exist", fix=f"write it from the run with r.artifact({name!r}), or pass --file NAME")
     digest = sha256(src)
-    row = store.x("SELECT * FROM artifacts WHERE sha=?", (digest,)).fetchone()
+    row = store.one("SELECT * FROM artifacts WHERE sha=?", (digest,))
     if row is not None:
-        verify(row)
+        p = file(store, row)
+        if not p.is_file():  # recorded by another machine, its file not shared: the same bytes from here
+            p.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, p)
+            os.chmod(p, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+        verify(store, row)
         if row["run_id"] != run_id:
-            print(f"kx: note: {rid(run_id)}'s {name} is byte-identical to {rid(row['run_id'])}'s artifact")
+            print(f"kx: note: {run_id}'s {name} is byte-identical to {row['run_id']}'s artifact")
         return row
     dest_dir = store.comp.store / "artifacts" / digest[:12]
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / Path(name).name
     shutil.copy2(src, dest)
     os.chmod(dest, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
-    manifest = {"sha256": digest, "name": Path(name).name, "size": dest.stat().st_size, "run": rid(run_id),
+    manifest = {"sha256": digest, "name": Path(name).name, "size": dest.stat().st_size, "run": run_id,
                 "git_sha": run["git_sha"], "git_dirty": bool(run["git_dirty"]), "kind": run["kind"],
                 "created": now(), "members": members(dest)}
     (dest_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    store.x("INSERT INTO artifacts (sha, run_id, name, path, size, manifest, created, actor) VALUES (?,?,?,?,?,?,?,?)",
-            (digest, run_id, manifest["name"], str(dest), manifest["size"], json.dumps(manifest), now(), actor))
-    return store.x("SELECT * FROM artifacts WHERE sha=?", (digest,)).fetchone()
+    store.insert("artifacts", {"sha": digest, "run_id": run_id, "name": manifest["name"],
+                               "path": dest.relative_to(store.comp.store).as_posix(), "size": manifest["size"],
+                               "manifest": json.dumps(manifest), "created": now(), "actor": actor})
+    return store.one("SELECT * FROM artifacts WHERE sha=?", (digest,))
 
 
-def verify(art) -> None:
+def verify(store: Store, art) -> None:
     """Artifacts are read-only where the filesystem allows it (not on NTFS/FUSE mounts): always re-hash."""
-    path = Path(art["path"])
+    path = file(store, art)
     if not path.is_file():
         raise KxError(f"artifact {art['sha'][:12]} is missing: {path}")
     if sha256(path) != art["sha"]:
@@ -109,10 +120,10 @@ def smoke(store: Store, art, timeout: int | None = None) -> tuple[bool, str]:
     if not cmd:
         return False, "no submission.smoke command configured in comp.yaml"
     timeout = timeout or int(store.comp.submission.get("smoke_timeout", SMOKE_TIMEOUT_S))
-    verify(art)
+    verify(store, art)
     with tempfile.TemporaryDirectory(prefix="kx-smoke-") as tmp:
         copy = Path(tmp) / art["name"]
-        shutil.copy2(art["path"], copy)
+        shutil.copy2(file(store, art), copy)
         os.chmod(copy, stat.S_IRUSR | stat.S_IWUSR)
         argv = [part.replace("{artifact}", str(copy)).replace("{dir}", tmp) for part in shlex.split(cmd)]
         argv = _confined(argv, Path(tmp))
@@ -123,5 +134,5 @@ def smoke(store: Store, art, timeout: int | None = None) -> tuple[bool, str]:
             ok, log = False, f"$ {' '.join(argv)}\ntimed out after {timeout}s"
         except OSError as e:
             ok, log = False, f"$ {' '.join(argv)}\ncannot run: {e}"
-    store.x("UPDATE artifacts SET smoke=?, smoke_log=? WHERE sha=?", ("passed" if ok else "failed", log, art["sha"]))
+    store.update("artifacts", {"smoke": "passed" if ok else "failed", "smoke_log": log}, sha=art["sha"])
     return ok, log

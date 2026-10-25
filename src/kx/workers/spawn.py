@@ -124,7 +124,7 @@ def worker_env(comp, name: str, task_id: int, w: dict) -> dict:
     venv = comp.main_root / ".venv"
     if venv.is_dir():
         env.update(VIRTUAL_ENV=str(venv), UV_PROJECT_ENVIRONMENT=str(venv), PATH=f"{venv / 'bin'}{os.pathsep}{env.get('PATH', '')}")
-    env.update(KX_AGENT=name, KX_TASK=f"T{task_id}")
+    env.update(KX_AGENT=name, KX_TASK=f"{task_id}")
     return env
 
 
@@ -158,11 +158,11 @@ def spawn(store: Store, name: str, task_ref, *, model: str | None = None, effort
     w = dict(comp.workers[name])
     t = tasks.get(store, task_ref)
     if t["status"] in ("done", "dropped"):
-        raise KxError(f"T{t['id']} is {t['status']}", fix=f"kx task reopen T{t['id']}")
+        raise KxError(f"{t['id']} is {t['status']}", fix=f"kx task reopen {t['id']}")
     if t["status"] == "active" and t["owner"] and not force:
-        raise KxError(f"T{t['id']} is active with {t['owner']}", fix="--force to start a worker on it anyway")
+        raise KxError(f"{t['id']} is active with {t['owner']}", fix="--force to start a worker on it anyway")
     if (b := tasks.blockers(store, t)) and not force:
-        raise KxError(f"T{t['id']} depends on tasks not done: {', '.join(b)}", fix="--force to start it anyway")
+        raise KxError(f"{t['id']} depends on tasks not done: {', '.join(b)}", fix="--force to start it anyway")
     running = live(store)
     if any(r["agent"] == name for r in running):
         raise KxError(f"worker {name} is already running", fix="kx workers")
@@ -172,17 +172,17 @@ def spawn(store: Store, name: str, task_ref, *, model: str | None = None, effort
     budgets.check(store, _worker_actor(name), {"tokens": 1})
     harness = w["harness"]
     model = model or w.get("model")
-    values = {"agent": name, "task": f"T{t['id']}", "model": model, "effort": effort or w.get("effort", "medium"),
+    values = {"agent": name, "task": t['id'], "model": model, "effort": effort or w.get("effort", "medium"),
               "store": str(comp.store), "sandbox": w.get("sandbox", "workspace-write"),
               "network": "false" if w.get("network") is False else "true"}
     wid = uuid.uuid4().hex[:12]
     if dry_run:
         values.update(worktree="<worktree>", context="<worktree>/.kx/context.md")
         values["prompt"] = PROMPT.format(**{k: values[k] for k in ("agent", "task", "context")})
-        return {"worker": name, "task": f"T{t['id']}", "argv": limit(confine(fill(harness_template(w), values), comp, w, None), w),
+        return {"worker": name, "task": t['id'], "argv": limit(confine(fill(harness_template(w), values), comp, w, None), w),
                 "dry_run": True}
     wt, branch = tasks.make_worktree(store, t)
-    store.x("UPDATE tasks SET branch=?, worktree=? WHERE id=?", (branch, str(wt), t["id"]))
+    store.update("tasks", {"branch": branch, "worktree": str(wt)}, id=t["id"])
     tasks.start(store, t["id"], owner=name)
     from kx.views import status
     ctx = wt / ".kx" / "context.md"
@@ -201,12 +201,12 @@ def spawn(store: Store, name: str, task_ref, *, model: str | None = None, effort
     env = worker_env(comp, name, t["id"], w)
     if foreground:
         code = run(comp, wid, env=env, echo=True)
-        return {"id": wid, "worker": name, "task": f"T{t['id']}", "worktree": str(wt), "code": code}
+        return {"id": wid, "worker": name, "task": t['id'], "worktree": str(wt), "code": code}
     with open(tdir / f"{wid}.runner.log", "ab") as log:  # the child keeps its own copy of the handle
         p = subprocess.Popen([sys.executable, "-m", "kx", "worker-run", wid], cwd=wt, env=env, stdin=subprocess.DEVNULL,
                              stdout=log, stderr=log, start_new_session=True)
     store.x("UPDATE workers SET pid=? WHERE id=?", (p.pid, wid))
-    return {"id": wid, "worker": name, "task": f"T{t['id']}", "worktree": str(wt), "pid": p.pid, "transcript": str(transcript)}
+    return {"id": wid, "worker": name, "task": t['id'], "worktree": str(wt), "pid": p.pid, "transcript": str(transcript)}
 
 
 def stop(store: Store, ref: str) -> dict:

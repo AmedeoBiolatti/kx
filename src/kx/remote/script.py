@@ -36,7 +36,7 @@ def env_spec(root: Path, sha: str, torch: str | None = None) -> tuple[str, bool,
     return "none" + (f"-{torch}" if torch else ""), False, None
 
 
-def run_sh(h, run_id: int, name: str, *, cmd: list[str], cwd: str, data_version: str | None, env: tuple,
+def run_sh(h, run_id: str, name: str, *, cmd: list[str], cwd: str, data_version: str | None, env: tuple,
            timeout: float | None) -> str:
     """The job's run.sh; everything it prints lands in out/*.log. `env` is env_spec()'s answer."""
     exports = {"KX_REMOTE": "1", "KX_RUN_ID": str(run_id), "KX_HOST": h.name, **{str(k): str(v) for k, v in h.env.items()}}

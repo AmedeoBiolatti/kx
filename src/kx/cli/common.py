@@ -28,5 +28,5 @@ def argv() -> list[str]:
     return [a for a in ARGV if a != "--json"]
 
 
-def task_here() -> int | None:
-    return tasks.current(Path.cwd())
+def task_here(st: Store) -> str | None:
+    return tasks.current(st, Path.cwd())

@@ -35,6 +35,17 @@ class FakeKaggle:
                 {"Rank": "2", "Score": "0.5", "TeamMemberUserNames": "me"}]
 
 
+@pytest.fixture(autouse=True, scope="session")
+def this_machines_config_untouched():
+    """A test that writes this machine's kx config (machine.yaml, hosts.yaml) fails the run: they are someone's."""
+    real = Path("~/.config/kx").expanduser()
+    before = {p.name: p.read_bytes() for p in real.glob("*.yaml")} if real.is_dir() else {}
+    yield
+    after = {p.name: p.read_bytes() for p in real.glob("*.yaml")} if real.is_dir() else {}
+    assert after == before, f"a test changed {real}: " + ", ".join(sorted(k for k in set(before) | set(after)
+                                                                          if before.get(k) != after.get(k)))
+
+
 @pytest.fixture(autouse=True)
 def own_hosts(tmp_path, monkeypatch):
     """Never this machine's hosts, host keys or machine role."""

@@ -67,7 +67,7 @@ def test_stale_run_shows_and_reaps(comp, capsys):
     with kx.run("dies") as r:
         pass
     with open_store() as st:
-        st.x("UPDATE runs SET status='running', pid=999999999 WHERE id=?", (r.id,))
+        st.update("runs", {"status": "running", "pid": 999999999}, id=r.id)
     code, s = run_kx("status", capsys=capsys)
     assert any(x["kind"] == "dead_run" for x in s["needs_you"])
     code, closed = run_kx("reap", capsys=capsys)
@@ -106,3 +106,55 @@ def test_parsed_metrics_are_reused_until_the_file_changes(tmp_path):
     (tmp_path / "inside").symlink_to(tmp_path / "model.bin")
     listed, _ = artifacts(tmp_path)
     assert listed == [{"path": "inside", "bytes": 5}, {"path": "model.bin", "bytes": 5}]  # a link out of the run is left out
+
+
+def test_curves_come_from_the_whole_file_and_live_readers_get_only_whats_new(tmp_path):
+    from kx.runs.progress import curve_summary, curves, sampled
+    path = tmp_path / "metrics.jsonl"
+
+    def write(lo, hi, restart=None):
+        with path.open("a") as f:
+            for i in range(lo, hi):
+                step = i - restart if restart is not None and i >= restart else i
+                rec = {"step": step, "loss": 1.0 / (i + 1), "pad": "x" * 200}
+                if i == 777:
+                    rec["loss"] = 99.0
+                f.write(json.dumps(rec) + "\n")
+
+    write(0, 12000)  # about 3 MB: past what used to be read (the last 2 MiB)
+    assert curves(tmp_path)["loss"][0] == [0, 1.0]
+    s = curve_summary(tmp_path)["loss"]
+    assert s["points"] == 12000 and s["first"] == 1.0 and s["max"] == 99.0
+    seen = sampled(tmp_path)
+    assert len(seen["points"]["loss"]) < 2500 and any(p[1] == 99.0 for p in seen["points"]["loss"])  # cut, the spike kept
+
+    def merge(old, new):
+        if new["start"] == 0:
+            return new
+        keep = old["done"]["loss"]
+        return {**new, "points": {"loss": old["points"]["loss"][:keep] + new["points"]["loss"]},
+                "done": {"loss": keep + new["done"]["loss"]}}
+
+    for lo, hi in ((12000, 12003), (12003, 12500), (12500, 30000)):
+        write(lo, hi, restart=20000)
+        with path.open("a") as f:
+            f.write('{"step": 5, "lo')  # still being written
+        new = sampled(tmp_path, seen["chunk"], seen["full"])
+        assert new["start"] or new["chunk"] != seen["chunk"]
+        if new["start"]:
+            assert len(new["points"]["loss"]) < 100  # only the chunks from the first not yet full
+        seen = merge(seen, new)
+        assert seen["points"] == sampled(tmp_path)["points"]  # the same as reading it all again
+        with path.open("a") as f:
+            f.write('ss": 1, broken}\n')  # the line ends, not as JSON: skipped
+    loss = seen["points"]["loss"]
+    assert sum(b[0] < a[0] for a, b in zip(loss, loss[1:])) == 1  # the restart at record 20000 survives the cut
+
+
+def test_runs_list_their_config_for_the_runs_table(comp, capsys):
+    with kx.run("cfg", config={"lr": 0.01, "model": {"depth": 4}}, seed=3) as r:
+        r.log(acc=0.9)
+    capsys.readouterr()
+    code, rows = run_kx("runs", "--config", capsys=capsys)
+    assert code == 0 and rows[0]["config"] == {"lr": 0.01, "model": {"depth": 4}} and rows[0]["seed"] == 3
+    assert rows[0]["metrics"]["acc"] == 0.9 and rows[0]["n"] == 1

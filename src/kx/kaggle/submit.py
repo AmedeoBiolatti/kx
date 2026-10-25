@@ -13,10 +13,10 @@ from kx.guard import budgets
 from kx.guard.gate import gate
 from kx.kaggle import artifacts, client as kaggle, competition, ladder
 from kx.ledger.config import KxError
-from kx.ledger.store import Store, norm_ts, now, parse_ts, rid
+from kx.ledger.store import Store, norm_ts, now, parse_ts
 from kx.runs.protocol import KAGGLE_PRIVATE, KAGGLE_PUBLIC, ensure_kaggle_protocols, reference
 
-TAG = re.compile(r"\bkx:r(\d+)\b")
+TAG = re.compile(r"\bkx:(r\d+(?:-[a-z]+-[a-z]+)?)\b")  # the run a submission came from, in its message
 LADDER_FRESH_S = 600
 
 
@@ -28,20 +28,20 @@ def check_kernel_ref(kernel: str | None) -> str:
     return kernel
 
 
-def kernel_version_for(store: Store, run_id: int, kernel: str, explicit=None) -> int:
+def kernel_version_for(store: Store, run_id: str, kernel: str, explicit=None) -> int:
     """The kernel version pushed for this run (`kx kernel push`)."""
     pushed = store.all("SELECT run_id, version FROM pushes WHERE kind='kernel' AND target=? AND version IS NOT NULL "
-                       "ORDER BY id", (kernel,))
+                       "ORDER BY created, id", (kernel,))
     mine = [p["version"] for p in pushed if p["run_id"] == run_id]
     if explicit is None:
         if not mine:
-            raise KxError(f"no kernel version pushed for {rid(run_id)}", fix=f"kx kernel push {rid(run_id)}")
+            raise KxError(f"no kernel version pushed for {run_id}", fix=f"kx kernel push {run_id}")
         return mine[-1]
     v = int(explicit)
     if v not in mine:
         owner = next((p["run_id"] for p in pushed if p["version"] == v), None)
-        raise KxError(f"{kernel} version {v} " + (f"was pushed for {rid(owner)}" if owner else "was not pushed by kx")
-                      + f", not for {rid(run_id)}", fix=f"kx kernel push {rid(run_id)}")
+        raise KxError(f"{kernel} version {v} " + (f"was pushed for {owner}" if owner else "was not pushed by kx")
+                      + f", not for {run_id}", fix=f"kx kernel push {run_id}")
     return v
 
 
@@ -83,7 +83,7 @@ def ladder_slots(store: Store, refresh: bool = False) -> dict | None:
 
     def rows():
         return store.all("SELECT * FROM submissions WHERE COALESCE(status,'') NOT IN ('error','unknown') "
-                         "ORDER BY created DESC, id DESC LIMIT ?", (n,))
+                         "ORDER BY created DESC, n DESC LIMIT ?", (n,))
     live = rows()
     out = live[n - 1] if len(live) >= n else None
     need = store.comp.min_episodes
@@ -92,7 +92,7 @@ def ladder_slots(store: Store, refresh: bool = False) -> dict | None:
         if at is None or (datetime.now(timezone.utc) - at).total_seconds() > LADDER_FRESH_S:
             try:
                 eps = kaggle.episodes(out["ref"])
-                store.x("UPDATE submissions SET episodes=?, episodes_at=? WHERE id=?", (count_episodes(eps), now(), out["id"]))
+                store.update("submissions", {"episodes": count_episodes(eps), "episodes_at": now()}, id=out["id"])
                 live = rows()
                 out = live[n - 1]
             except KxError:
@@ -106,11 +106,11 @@ def ladder_problem(store: Store, refresh: bool = True) -> str | None:
     if lad is None or lad["settled"]:
         return None
     o = lad["out"]
-    return (f"only the last {lad['active']} submissions play: a new one would retire S{o['id']} after "
+    return (f"only the last {lad['active']} submissions play: a new one would retire {o['id']} after "
             f"{o['episodes'] or 0}/{lad['need']} games, before its rating means anything")
 
 
-def _best_line(store: Store, run_id: int) -> dict:
+def _best_line(store: Store, run_id: str) -> dict:
     ref = reference(store)
     if not ref["id"]:
         return {"reference": None}
@@ -121,17 +121,17 @@ def _best_line(store: Store, run_id: int) -> dict:
     out = {"reference": ref["id"],
            "this_run": score(mine["value"], mine["se"]) if mine else "not scored under the reference protocol"}
     if top:
-        out["best"] = f"{rid(top[0]['id'])} {score(top[0]['value'], top[0]['se'])}"
+        out["best"] = f"{top[0]['id']} {score(top[0]['value'], top[0]['se'])}"
     return out
 
 
-def plan(store: Store, run_id: int, message: str, *, file: str | None = None, kernel_version=None,
+def plan(store: Store, run_id: str, message: str, *, file: str | None = None, kernel_version=None,
          early: bool = False, sync: bool = True) -> dict:
     """Every check that can be made before sending; builds and smoke-tests the artifact. Returns the preview."""
     comp = store.comp
     run = store.get_run(run_id)
     if run["status"] != "done":
-        raise KxError(f"{rid(run_id)} is {run['status']}, not done", fix=f"kx show {rid(run_id)}")
+        raise KxError(f"{run_id} is {run['status']}, not done", fix=f"kx show {run_id}")
     limit = comp.submission.get("daily_limit")
     if sync and limit is not None:
         try:
@@ -146,9 +146,9 @@ def plan(store: Store, run_id: int, message: str, *, file: str | None = None, ke
     if not early and (lp := ladder_problem(store)):
         problems.append(lp)
     sha7 = (run["git_sha"] or "nogit")[:7]
-    full_msg = f"kx:{rid(run_id)} {sha7} {message}".strip()
+    full_msg = f"kx:{run_id} {sha7} {message}".strip()
     out_name = file or comp.submission.get("file", "submission.csv")
-    preview = {"run": rid(run_id), "hypothesis": run["hypothesis"], "git": sha7 + ("+dirty" if run["git_dirty"] else ""),
+    preview = {"run": run_id, "hypothesis": run["hypothesis"], "git": sha7 + ("+dirty" if run["git_dirty"] else ""),
                "message": full_msg, "slots": f"{sl['used'] + 1}/{limit} today" if limit else "no daily limit known",
                **_best_line(store, run_id)}
     if comp.kind == "code":
@@ -158,7 +158,7 @@ def plan(store: Store, run_id: int, message: str, *, file: str | None = None, ke
         dup = store.one("SELECT id, ref FROM submissions WHERE target=? AND COALESCE(status,'') != 'error'", (target,))
         status, _ = kaggle.kernel_status(kernel, version)
         if status != "complete":
-            problems.append(f"{kernel} version {version} is {status}, not complete (kx kernel status {rid(run_id)})")
+            problems.append(f"{kernel} version {version} is {status}, not complete (kx kernel status {run_id})")
         preview.update(target=target, output=out_name, kernel_status=status)
     else:
         art = artifacts.build(store, run_id, out_name, None)
@@ -173,14 +173,14 @@ def plan(store: Store, run_id: int, message: str, *, file: str | None = None, ke
             preview["smoke"] = "passed"
         else:
             notes.append("no submission.smoke in comp.yaml: the file was not smoke-tested")
-        artifacts.verify(art)
+        artifacts.verify(store, art)
         preview.update(target=target, artifact=art["sha"][:12], size=f"{(art['size'] or 0) / 2**20:.1f} MB")
     if dup:
-        notes.append(f"this exact {'kernel version' if comp.kind == 'code' else 'file'} was already submitted as S{dup['id']}")
+        notes.append(f"this exact {'kernel version' if comp.kind == 'code' else 'file'} was already submitted as {dup['id']}")
     lad = ladder_slots(store)
     if lad and lad["out"]:
         o = lad["out"]
-        preview["ladder"] = f"retires S{o['id']} ({o['episodes'] or 0}/{lad['need']} games played)"
+        preview["ladder"] = f"retires {o['id']} ({o['episodes'] or 0}/{lad['need']} games played)"
     if problems:
         raise KxError("cannot submit: " + "; ".join(problems),
                       fix="--early sends it anyway while the retired submission has few games" if any("retire" in p for p in problems) else None,
@@ -194,7 +194,7 @@ def plan(store: Store, run_id: int, message: str, *, file: str | None = None, ke
 
 def submit(store: Store, actor, run_ref, message: str, *, why: str | None = None, expect: str | None = None,
            yes: bool = False, argv: list[str] | None = None, file: str | None = None, kernel_version=None,
-           early: bool = False, task: int | None = None) -> dict:
+           early: bool = False, task: str | None = None) -> dict:
     run_id = store.resolve(run_ref)
     p = plan(store, run_id, message, file=file, kernel_version=kernel_version, early=early)
     notes = budgets.check(store, actor, {"submissions": 1})
@@ -202,38 +202,46 @@ def submit(store: Store, actor, run_ref, message: str, *, why: str | None = None
     shown.update(why=why, expect=expect)
     if notes:
         shown["notes"] = shown.get("notes", []) + notes
-    gate(actor, argv or ["submit", rid(run_id), "-m", message], f"submit {rid(run_id)} ({p.get('artifact') or p.get('target')})",
+    gate(actor, argv or ["submit", run_id, "-m", message], f"submit {run_id} ({p.get('artifact') or p.get('target')})",
          shown, yes=yes, task=task)
     comp = store.comp
-    with store.transaction():
-        dupe = store.one("SELECT id FROM submissions WHERE status IN ('inflight','unknown')")
+    with store.transaction():  # checked again and charged under the lock: two agents here cannot both pass a cap
+        budgets.check(store, actor, {"submissions": 1})
+        # one sent here, or a moment ago by another machine, that Kaggle may have (another machine's that stays
+        # unknown is for it to settle)
+        dupe = store.one(f"SELECT id FROM submissions WHERE status IN ('inflight','unknown') AND "
+                         f"(writer IN ({','.join('?' * len(store.writers))}) OR created >= ?)",
+                         (*store.writers, (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(timespec="seconds")))
         if dupe:
-            raise KxError(f"S{dupe['id']} was sent but kx does not know whether Kaggle got it", fix="kx sync")
-        sid = store.x("INSERT INTO submissions (run_id, task, created, actor, message, why, expect, kind, target, "
-                      "artifact, status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                      (run_id, task, now(), actor.name, p["message"], why, expect, comp.kind, p["_target"],
-                       p["_artifact"], "inflight")).lastrowid
+            raise KxError(f"{dupe['id']} was sent but kx does not know whether Kaggle got it", fix="kx sync")
+        sid = store.new("submissions", {"run_id": run_id, "task": task, "created": now(), "actor": actor.name,
+                                        "message": p["message"], "why": why, "expect": expect, "kind": comp.kind,
+                                        "target": p["_target"], "artifact": p["_artifact"], "status": "inflight"})
+        budgets.charge(store, actor, "submissions", 1, sid)  # Kaggle counts one it got, whatever kx hears back
     try:
         if comp.kind == "code":
             kernel, version = p["_kernel"]
             out = kaggle.submit_kernel(comp.slug, kernel, version, p["_out_name"], p["message"])
         else:
-            out = kaggle.submit_file(comp.slug, Path(p["_target"]), p["message"])
+            out = kaggle.submit_file(comp.slug, comp.store / p["_target"], p["message"])
     except Exception:
-        store.x("UPDATE submissions SET status='unknown' WHERE id=?", (sid,))
+        store.update("submissions", {"status": "unknown"}, id=sid)
         raise
-    store.x("UPDATE submissions SET status='submitted' WHERE id=?", (sid,))
-    budgets.charge(store, actor, "submissions", 1, f"S{sid}")
-    return {"submission": sid, "run": rid(run_id), "output": out.strip(), "preview": shown}
+    store.update("submissions", {"status": "submitted"}, id=sid)
+    return {"submission": sid, "run": run_id, "output": out.strip(), "preview": shown}
 
 
 def find(store: Store, ref) -> dict:
+    """A submission by its id, number or name, or by Kaggle's id."""
     ref = str(ref).strip()
-    n = int(ref[1:]) if re.fullmatch(r"[Ss]\d+", ref) else int(ref) if ref.isdigit() else -1
-    row = store.one("SELECT * FROM submissions WHERE id=? OR ref=? ORDER BY id=? DESC LIMIT 1", (n, ref, n))
-    if row is None:
-        raise KxError(f"no submission {ref!r}", fix="kx subs")
-    return dict(row)
+    try:
+        key = store.resolve(ref, "submissions")
+    except KxError:
+        row = store.one("SELECT * FROM submissions WHERE ref=? ORDER BY created LIMIT 1", (ref,))
+        if row is None:
+            raise
+        return dict(row)
+    return dict(store.one("SELECT * FROM submissions WHERE id=?", (key,)))
 
 
 def _status(s) -> str:
@@ -274,7 +282,7 @@ def _explain_failures(store: Store, remote: list[dict]):
     for r in store.all("SELECT * FROM submissions WHERE status='error' AND error IS NULL AND ref IS NOT NULL"):
         reason = desc.get(str(r["ref"])) or (failure_reason(r["ref"]) if store.comp.kind == "simulation" else None) \
             or "Kaggle reported an error without a description"
-        store.x("UPDATE submissions SET error=? WHERE id=?", (reason, r["id"]))
+        store.update("submissions", {"error": reason}, id=r["id"])
 
 
 def sync_submissions(store: Store, remote: list[dict] | None = None, games: bool = True) -> dict:
@@ -285,24 +293,25 @@ def sync_submissions(store: Store, remote: list[dict] | None = None, games: bool
     for s in remote:
         ref = str(s.get("ref"))
         desc = s.get("description") or ""
-        m = TAG.search(desc)
-        run_id = int(m.group(1)) if m else None
-        vals = (_status(s.get("status")), kaggle.to_float(s.get("publicScore")), kaggle.to_float(s.get("privateScore")), now())
-        if store.one("SELECT 1 FROM submissions WHERE ref=?", (ref,)):
-            store.x("UPDATE submissions SET status=?, public=?, private=?, updated=? WHERE ref=?", (*vals, ref))
-            updated += 1
+        vals = {"status": _status(s.get("status")), "public": kaggle.to_float(s.get("publicScore")),
+                "private": kaggle.to_float(s.get("privateScore"))}
+        # the submission kx made first (another machine may have taken it as external before its log came)
+        row = store.one("SELECT * FROM submissions WHERE ref=? AND kind IS NOT 'external'", (ref,)) or \
+            store.one("SELECT * FROM submissions WHERE ref IS NULL AND message=? ORDER BY created, n LIMIT 1", (desc,)) or \
+            store.one("SELECT * FROM submissions WHERE ref=?", (ref,))
+        if row:  # only a change is written (and logged)
+            if row["ref"] != ref or any(row[k] != v for k, v in vals.items()):
+                store.update("submissions", {"ref": ref, **vals, "updated": now()}, id=row["id"])
+                updated += 1
             continue
-        local = store.one("SELECT id FROM submissions WHERE ref IS NULL AND message=? ORDER BY id LIMIT 1", (desc,))
-        if local:
-            store.x("UPDATE submissions SET ref=?, status=?, public=?, private=?, updated=? WHERE id=?", (ref, *vals, local["id"]))
-            updated += 1
-        else:
-            if run_id is not None and not store.one("SELECT 1 FROM runs WHERE id=?", (run_id,)):
-                run_id = None
-            store.x("INSERT INTO submissions (ref, run_id, created, message, kind, target, status, public, private, updated)"
-                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (ref, run_id, norm_ts(s.get("date")), desc, "external", s.get("fileName"), *vals))
-            new += 1
+        m = TAG.search(desc)
+        try:
+            run_id = store.resolve(m.group(1)) if m else None
+        except KxError:
+            run_id = None
+        store.new("submissions", {"ref": ref, "run_id": run_id, "created": norm_ts(s.get("date")), "message": desc,
+                                  "kind": "external", "target": s.get("fileName"), **vals, "updated": now()})
+        new += 1
     try:
         _explain_failures(store, remote)
     except Exception as e:  # noqa: BLE001 - explaining a failure must never break the sync
@@ -326,9 +335,9 @@ def refresh_episodes(store: Store, limit: int = 6, log=None) -> int:
             eps = kaggle.episodes(r["ref"])
         except KxError as e:
             if log:
-                log(f"could not fetch games of S{r['id']}: {str(e).splitlines()[0]}")
+                log(f"could not fetch games of {r['id']}: {str(e).splitlines()[0]}")
             continue
-        store.x("UPDATE submissions SET episodes=?, episodes_at=? WHERE id=?", (count_episodes(eps), now(), r["id"]))
+        store.update("submissions", {"episodes": count_episodes(eps), "episodes_at": now()}, id=r["id"])
         ladder.store_episodes(store, r["id"], eps, r["ref"])
         n += 1
     return n
@@ -339,11 +348,14 @@ def _refresh_kaggle_scores(store: Store):
     for col, pid in (("public", KAGGLE_PUBLIC), ("private", KAGGLE_PRIVATE)):
         latest, count = {}, {}
         for r in store.all(f"SELECT run_id, {col} AS v FROM submissions WHERE run_id IS NOT NULL AND {col} IS NOT NULL"
-                           " ORDER BY created, id"):
+                           " ORDER BY created, n"):
             latest[r["run_id"]] = r["v"]
             count[r["run_id"]] = count.get(r["run_id"], 0) + 1
         for run_id, v in latest.items():
-            store.x("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?,?)", (run_id, pid, v, None, count[run_id], None, now()))
+            had = store.one("SELECT value, n FROM scores WHERE run_id=? AND protocol_id=?", (run_id, pid))
+            if had is None or (had["value"], had["n"]) != (v, count[run_id]):
+                store.insert("scores", {"run_id": run_id, "protocol_id": pid, "value": v, "se": None, "n": count[run_id],
+                                        "breakdown": None, "created": now()}, on="replace")
 
 
 def sync_leaderboard(store: Store, rows: list[dict] | None = None) -> dict:
@@ -364,7 +376,7 @@ def sync_leaderboard(store: Store, rows: list[dict] | None = None) -> dict:
     snap = {"ts": now(), "n_teams": n, "top": score_at(1), "our_rank": int(ours["Rank"]) if ours else None,
             "our_score": kaggle.to_float(ours.get("Score")) if ours else None, "gold": score_at(th.get("gold", 0)),
             "silver": score_at(th.get("silver", 0)), "bronze": score_at(th.get("bronze", 0))}
-    store.x("INSERT INTO lb_snapshots VALUES (:ts,:n_teams,:top,:our_rank,:our_score,:gold,:silver,:bronze)", snap)
+    store.insert("lb_snapshots", snap)
     if n and rows[0].get("LastSubmissionDate"):
         store.set_setting("lb_bounds", {"ts": snap["ts"], "days": lb_bounds(rows, medals)})
     return {**snap, "thresholds": th, "username": user, "medals": medals, "category": category}
@@ -396,7 +408,7 @@ def lb_bounds(rows: list[dict], medals: bool = True) -> list[dict]:
 
 def listing(store: Store, limit: int = 15) -> list[dict]:
     out = []
-    for r in store.all("SELECT * FROM submissions ORDER BY created DESC, id DESC LIMIT ?", (limit,)):
+    for r in store.all("SELECT * FROM submissions ORDER BY created DESC, n DESC LIMIT ?", (limit,)):
         d = dict(r)
         if store.comp.kind == "simulation":
             d["games"] = ladder.summary(store, r["id"], ladder.our_name(store))

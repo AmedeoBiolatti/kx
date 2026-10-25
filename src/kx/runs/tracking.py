@@ -21,7 +21,7 @@ from kx.guard import actors, budgets
 from kx.kaggle import data as _data
 from kx.ledger import config as _config
 from kx.ledger.config import KxError
-from kx.ledger.store import HEARTBEAT_S, Store, dumps, loads, now, proc_start, rid
+from kx.ledger.store import HEARTBEAT_S, Store, dumps, loads, now, proc_start
 from kx.runs import environment as _env, git
 from kx.runs.compare import se_from_breakdown
 from kx.runs import objects
@@ -32,10 +32,9 @@ RUN_KINDS = ("experiment", "probe")  # a probe may run on uncommitted code (its 
 
 
 class Run:
-    def __init__(self, store: Store, run_id: int):
+    def __init__(self, store: Store, run_id: str):
         self.store = store
-        self.id = run_id
-        self.name = rid(run_id)
+        self.id = self.name = run_id
         self.dir = store.run_dir(run_id)
         self.dir.mkdir(parents=True, exist_ok=True)
 
@@ -59,7 +58,7 @@ class Run:
         with self.store.transaction():
             row = self.store.get_run(self.id)
             merged = {**(loads(row["metrics"]) or {}), **metrics}
-            self.store.x("UPDATE runs SET metrics=? WHERE id=?", (dumps(merged), self.id))
+            self.store.update("runs", {"metrics": dumps(merged)}, id=self.id)
         if step is None:
             from kx.runs.progress import append_summary
             append_summary(self.dir, metrics)
@@ -102,26 +101,27 @@ def _check_score(value, protocol) -> float:
     return value
 
 
-def _record_score(store: Store, run_id: int, value, protocol, *, se=None, breakdown=None, n=None) -> str:
+def _record_score(store: Store, run_id: str, value, protocol, *, se=None, breakdown=None, n=None) -> str:
     value = _check_score(value, protocol)
     pid = register(store, protocol)
     nums = [v for v in (breakdown or {}).values() if isinstance(v, (int, float))]
     if len(nums) >= 2 and not (min(nums) - 1e-9 <= value <= max(nums) + 1e-9):
-        print(f"kx: warning: {rid(run_id)} value {value:.6g} is outside its breakdown range "
+        print(f"kx: warning: {run_id} value {value:.6g} is outside its breakdown range "
               f"[{min(nums):.6g}, {max(nums):.6g}]; comparisons test the breakdown, not the value", file=sys.stderr)
     if se is None:
         se, n_auto = se_from_breakdown(breakdown, protocol.noise)
         n = n or n_auto
     elif n is None and breakdown:
         n = len(breakdown)
-    store.x("INSERT OR REPLACE INTO scores VALUES (?,?,?,?,?,?,?)", (run_id, pid, value, se, n, dumps(breakdown), now()))
+    store.insert("scores", {"run_id": run_id, "protocol_id": pid, "value": value, "se": se, "n": n,
+                            "breakdown": dumps(breakdown), "created": now()}, on="replace")
     return pid
 
 
 class _Heartbeat(threading.Thread):
-    """Touches runs.heartbeat so `kx reap` can tell a live run from a killed one."""
+    """Touches runs.heartbeat (in the cache only, not the log) so `kx reap` can tell a live run from a killed one."""
 
-    def __init__(self, db_path: Path, run_id: int, interval: float = HEARTBEAT_S):
+    def __init__(self, db_path: Path, run_id: str, interval: float = HEARTBEAT_S):
         super().__init__(daemon=True, name=f"kx-heartbeat-{run_id}")
         self.db_path, self.run_id, self.interval = db_path, run_id, interval
         self.stopped = threading.Event()
@@ -212,21 +212,19 @@ def begin(hypothesis: str, config: dict | None = None, *, parent=None, tags=(), 
         if seed is None and isinstance(config, dict) and isinstance(config.get("seed"), int):
             seed = config["seed"]
         env, _ = _env.capture(comp.main_root)
-        task_id = _tasks.current(root, store, who.name)
+        task_id = _tasks.current(store, root, who.name)
         with store.transaction():
             parent_id = _parent(store, parent)
-            cur = store.x(
-                "INSERT INTO runs (created, status, kind, hypothesis, config, command, author, task, parent, grp, seed,"
-                " git_sha, git_branch, git_dirty, worktree, host, pid, pid_start, heartbeat, env, gpus)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (now(), "running", kind, hypothesis, dumps(config),
-                 json.dumps(command or sys.argv), who.name, task_id, parent_id, group, seed,
-                 g["sha"], g["branch"], int(g["dirty"]), g["worktree"],
-                 socket.gethostname(), os.getpid(), proc_start(os.getpid()), now(), dumps(env), gpus or None))
-            r = Run(store, cur.lastrowid)
+            key = store.new("runs", {
+                "created": now(), "status": "running", "kind": kind, "hypothesis": hypothesis, "config": dumps(config),
+                "command": json.dumps(command or sys.argv), "author": who.name, "task": task_id, "parent": parent_id,
+                "grp": group, "seed": seed, "git_sha": g["sha"], "git_branch": g["branch"], "git_dirty": int(g["dirty"]),
+                "worktree": g["worktree"], "host": socket.gethostname(), "pid": os.getpid(),
+                "pid_start": proc_start(os.getpid()), "heartbeat": now(), "env": dumps(env), "gpus": gpus or None})
+            r = Run(store, key)
             store.add_tags(r.id, tags)
         if g["dirty"]:
-            store.x("UPDATE runs SET patch=? WHERE id=?", (_save_patch(Path(g["worktree"]), r.dir / "code"), r.id))
+            store.update("runs", {"patch": _save_patch(Path(g["worktree"]), r.dir / "code")}, id=r.id)
     except BaseException:
         store.close()
         raise
@@ -249,10 +247,10 @@ def end(act: _Active, error: BaseException | str | None = None):
             error = error or f"scores not recorded: {e}"
         if error is not None:
             text = error if isinstance(error, str) else "".join(traceback.format_exception(error))
-            store.x("UPDATE runs SET status='failed', finished=?, error=? WHERE id=?", (now(), text[-4000:], r.id))
+            store.update("runs", {"status": "failed", "finished": now(), "error": text[-4000:]}, id=r.id)
             print(f"kx: {r.name} failed", file=sys.stderr)
         else:
-            store.x("UPDATE runs SET status='done', finished=? WHERE id=?", (now(), r.id))
+            store.update("runs", {"status": "done", "finished": now()}, id=r.id)
             n = store.one("SELECT COUNT(*) FROM scores WHERE run_id=?", (r.id,))[0]
             print(f"kx: {r.name} done ({n} score(s))", file=sys.stderr)
         if act.gpus:
@@ -319,8 +317,8 @@ class FileRun(Run):
     """A run on a remote host (kx exec --on, KX_REMOTE=1): there is no ledger there, so everything is written to files
     in the run dir, which kx copies back and records (the same files a non-Python command may write)."""
 
-    def __init__(self, run_dir: Path, run_id: int):
-        self.store, self.id, self.name, self.dir = None, run_id, rid(run_id), Path(run_dir)
+    def __init__(self, run_dir: Path, run_id: str):
+        self.store, self.id, self.name, self.dir = None, run_id, run_id, Path(run_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def score(self, value, protocol, *, se=None, breakdown=None, n=None) -> str:
@@ -358,11 +356,15 @@ def _no_ledger(what: str):
                   fix="do it on the main machine (kx exec without --on)")
 
 
-def _attach(store: Store, run_id: int, hypothesis, config, seed, group):
+def _attach(store: Store, run_id: str, hypothesis, config, seed, group):
+    """What kx.run says about the run of the kx exec it runs in, where kx exec left it empty."""
     if seed is None and isinstance(config, dict):
         seed = config.get("seed")
-    store.x("UPDATE runs SET hypothesis=COALESCE(hypothesis, ?), config=COALESCE(config, ?), seed=COALESCE(seed, ?),"
-            " grp=COALESCE(grp, ?) WHERE id=?", (hypothesis, dumps(config), seed, group, run_id))
+    row = store.get_run(run_id)
+    values = {k: v for k, v in (("hypothesis", hypothesis), ("config", dumps(config)), ("seed", seed), ("grp", group))
+              if v is not None and row[k] is None}
+    if values:
+        store.update("runs", values, id=run_id)
 
 
 def current_run() -> Run | None:
@@ -371,8 +373,8 @@ def current_run() -> Run | None:
     if not run_id:
         return None
     if remote():
-        return FileRun(Path(os.environ["KX_RUN_DIR"]), int(run_id))
-    return Run(Store(_config.load()), int(run_id))
+        return FileRun(Path(os.environ["KX_RUN_DIR"]), run_id)
+    return Run(Store(_config.load()), run_id)
 
 
 @contextmanager

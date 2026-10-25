@@ -63,7 +63,7 @@ def test_remote_run_records_scores_notes_artifacts(box, comp, capsys):
     assert show["scores"][0]["protocol"].startswith("cv3@") and show["scores"][0]["value"] == 0.8
     assert any("trained on kaggle:" in n["text"] for n in show["notes"])
     assert "algorithm" in show["tags"] and show["seed"] == 1
-    d = Store(config.load()).run_dir(int(out["run"][1:]))
+    d = Store(config.load()).run_dir(out["run"])
     assert (d / "submission.csv").read_text().startswith("id,y") and "done training" in (d / "stdout.log").read_text()
     inf = json.loads((d / "remote.json").read_text())
     assert inf["exit"] == 0 and inf["hours"] is not None
@@ -83,12 +83,12 @@ def test_detached_probe_ships_patch_and_failure_is_recorded(box, comp, capsys):
     assert item["state"] == "failed" and item["exit"] == 3
     code, show = run_kx("show", out["run"], capsys=capsys)
     assert "exit code 3" in show["error"]
-    assert "probe ran" in (Store(config.load()).run_dir(int(out["run"][1:])) / "stdout.log").read_text()
+    assert "probe ran" in (Store(config.load()).run_dir(out["run"]) / "stdout.log").read_text()
 
 
 def test_kill_and_stale_remote_run_shows_in_status(box, comp, capsys):
     code, out = _exec(capsys, "--on", "box", "--detach", "--", "python", "-c", "import time; time.sleep(60)")
-    run_id = int(out["run"][1:])
+    run_id = out["run"]
     d = Store(config.load()).run_dir(run_id)
     inf = json.loads((d / "remote.json").read_text())
     inf["launched"] = "2026-01-01T00:00:00+00:00"
@@ -226,7 +226,6 @@ def test_big_files_stay_on_the_host_until_fetched(box, comp, capsys, monkeypatch
     """A checkpoint is not copied on every poll (that made syncs take minutes), nor when the run ends: the run lists
     it, and kx fetch copies it when someone wants it."""
     monkeypatch.setattr(execute, "LOW_DISK", 0)  # whatever this machine's disk has free
-    go = box.parent / "go"
     script = ("import os, time, kx\n"
               "with kx.run('big') as r:\n"
               "    r.step(0, loss=1.0)\n"
@@ -235,11 +234,11 @@ def test_big_files_stay_on_the_host_until_fetched(box, comp, capsys, monkeypatch
               "    with open(r.dir / 'ckpt' / 'best.pt', 'wb') as f: f.truncate(33 * 2**20)\n"
               "    (r.dir / 'small.json').write_text('{}')\n"
               "    (r.dir / 'remote.json').write_text('{\"ssh_opts\": [\"-oProxyCommand=evil\"]}')\n"
-              f"    while not os.path.exists({str(go)!r}): time.sleep(0.05)\n")
+              "    while not (r.dir / 'go').exists(): time.sleep(0.05)\n")  # the job's /tmp is its own
     (comp / "big.py").write_text(script)
     commit(comp, "big")
     code, out = _exec(capsys, "--on", "box", "--detach", "--", "python", "big.py")
-    d = Store(config.load()).run_dir(int(out["run"][1:]))
+    d = Store(config.load()).run_dir(out["run"])
     remote = box / "demo" / "runs" / out["run"] / "out"
     for _ in range(200):
         if (remote / "small.json").exists():
@@ -247,7 +246,7 @@ def test_big_files_stay_on_the_host_until_fetched(box, comp, capsys, monkeypatch
         time.sleep(0.05)
     run_kx("remote", "sync", out["run"], capsys=capsys)
     assert (d / "small.json").exists() and (d / "metrics.jsonl").exists() and not (d / "model.pt").exists()
-    go.write_text("")
+    (remote / "go").write_text("")
     item = _wait_synced(capsys, out["run"])
     assert item["state"] == "done" and not (d / "model.pt").exists()
     code, show = run_kx("show", out["run"], capsys=capsys)
@@ -265,7 +264,7 @@ def test_low_disk_space_leaves_big_files_on_the_host(box, comp, capsys, monkeypa
                                   "    with open(r.dir / 'model.pt', 'wb') as f: f.truncate(40 * 2**20)\n")
     commit(comp, "ckpt")
     code, out = _exec(capsys, "--on", "box", "--", "python", "ckpt.py")
-    d = Store(config.load()).run_dir(int(out["run"][1:]))
+    d = Store(config.load()).run_dir(out["run"])
     monkeypatch.setattr(execute, "LOW_DISK", 2**62)  # "no room here"
     code, r = run_kx("fetch", out["run"], capsys=capsys)
     assert not (d / "model.pt").exists() and r["on_host"][0]["path"] == "model.pt"
@@ -291,7 +290,7 @@ def test_a_remote_run_is_confined(box, comp, capsys, tmp_path):
     (comp / "probe.py").write_text(script)
     commit(comp, "probe")
     code, out = _exec(capsys, "--on", "box", "--", "python", "probe.py")
-    d = Store(config.load()).run_dir(int(out["run"][1:]))
+    d = Store(config.load()).run_dir(out["run"])
     try:
         assert code == 0, (d / "stderr.log").read_text()
         assert (d / "stdout.log").read_text().split() == ["refused", "wrote", "wrote", "no-ssh"]

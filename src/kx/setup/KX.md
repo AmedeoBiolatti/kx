@@ -66,7 +66,9 @@ with kx.run("what this run tests", config=cfg, seed=cfg["seed"], tags=["algorith
   command for the person, text), `kx task done T7 --result positive|negative|inconclusive --outcome "..."`.
   Negative results are results: say what was tried and what was learned.
 - `kx search` before trying an idea. Conclusions go in findings, with the runs that support them:
-  `kx finding add "fold 3 leaks through user_id" --evidence r12 r15 --tag data`. Refer to them as F<n>.
+  `kx finding add "fold 3 leaks through user_id" --evidence r12 r15 --tag data`.
+- Other machines and people read what you write. In notes, outcomes and findings write the full id
+  (`r0012-fluent-sun`, `F3-bold-comet`): a bare `r12` means this machine's r12, and another machine may have one too.
 
 ## Kaggle
 
@@ -85,8 +87,9 @@ with kx.run("what this run tests", config=cfg, seed=cfg["seed"], tags=["algorith
 ## Budgets
 
 `kx budget` shows the caps in comp.yaml `budgets:` (submissions, Kaggle GPU hours, local GPU hours from
-`kx exec --gpus N`, worker tokens, `cloud_usd` for paid remote hosts). Over a cap, the action is refused with when
-it frees up (exit 4). Wait, or work on something that does not need it.
+`kx exec --gpus N`, worker tokens, `cloud_usd` for paid remote hosts), each with what it counts (the team, a person,
+this machine). Over a cap, the action is refused with when it frees up (exit 4). Wait, or work on something that does
+not need it.
 
 ## Data and files
 

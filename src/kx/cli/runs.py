@@ -12,7 +12,7 @@ from pathlib import Path
 from kx.board import findings, tasks
 from kx.cli.common import Out, S
 from kx.ledger.config import KxError
-from kx.ledger.store import Store, loads, norm_tags, rid
+from kx.ledger.store import Store, loads, norm_tags
 from kx.views.text import ago, bold, dim, dur, num, score, table, trunc, width
 
 
@@ -41,14 +41,14 @@ def cmd_exec(a):
                                   config=_config_arg(a.config), tags=a.tag or (), group=a.group, seed=a.seed,
                                   parent=a.parent, timeout=a.timeout, gpus=a.gpus or 0,
                                   detach=a.detach, echo=not a.json, needs=a.needs or ())
-        return Out({"run": rid(run_id), "exit": code, "host": a.on, "detached": a.detach}, None, code)
+        return Out({"run": run_id, "exit": code, "host": a.on, "detached": a.detach}, None, code)
     if a.detach:
         raise KxError("--detach is for remote runs (--on HOST)", code=2)
     run_id, code = run_command(cmd, hypothesis=a.hypothesis, kind="probe" if a.probe else "experiment",
                                config=_config_arg(a.config), tags=a.tag or (), group=a.group, seed=a.seed,
                                parent=a.parent, timeout=a.timeout, gpus=a.gpus or 0,
                                echo=not a.json)
-    return Out({"run": rid(run_id), "exit": code}, None, code)
+    return Out({"run": run_id, "exit": code}, None, code)
 
 
 def _ref_scores(st: Store) -> tuple[dict, dict]:
@@ -66,14 +66,14 @@ def cmd_runs(a):
         where, params = [], []
         if a.task:
             where.append("task=?")
-            params.append(tasks.parse_id(a.task))
+            params.append(st.resolve(a.task, "tasks"))
         if a.status:
             where.append("status=?")
             params.append(a.status)
         if a.tag:
             where.append("id IN (SELECT run_id FROM tags WHERE tag=?)")
             params.append(norm_tags([a.tag])[0])
-        sql = "SELECT * FROM runs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
+        sql = "SELECT * FROM runs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY n DESC, created DESC LIMIT ?"
         rows = st.all(sql, (*params, a.n))
         ref, vals = _ref_scores(st)
         notes = st.last_notes()
@@ -88,7 +88,7 @@ def cmd_runs(a):
         for r in rows:
             sc = vals.get(r["id"])
             other = None if sc else latest.get(r["id"])
-            d = {"run": rid(r["id"]), "status": r["status"], "kind": r["kind"], "created": r["created"], "author": r["author"],
+            d = {"run": r["id"], "status": r["status"], "kind": r["kind"], "created": r["created"], "author": r["author"],
                  "task": r["task"], "hypothesis": r["hypothesis"], "note": notes.get(r["id"]),
                  "score": dict(sc) if sc else None, "other_score": dict(other) if other else None,
                  "host": remote_host(st, r), "finished": r["finished"]}
@@ -99,22 +99,25 @@ def cmd_runs(a):
             if a.curves:
                 from kx.runs.progress import curve_names
                 d["curves"] = curve_names(st.run_dir(r["id"]))
+            if a.config:
+                d.update(config=loads(r["config"]), metrics=loads(r["metrics"]), seed=r["seed"], group=r["grp"], n=r["n"],
+                         git_sha=r["git_sha"], command=loads(r["command"]) if (r["command"] or "").startswith("[") else r["command"])
             data.append(d)
             shown = score(sc["value"], sc["se"]) if sc else (dim(f"{num(other['value'])} {other['protocol_id']}") if other else "")
             trows.append([d["run"], r["status"], ago(r["created"]), r["kind"][:5],
                           (r["author"] or "") + (f" @{d['host']}" if d["host"] else ""),
-                          f"T{r['task']}" if r["task"] else "", shown, r["hypothesis"] or ""])
+                          r['task'] if r["task"] else "", shown, r["hypothesis"] or ""])
     head = dim(f"score column: reference {ref['id']}" if ref["id"] else "no reference protocol yet")
     return Out(data, (table(trows, ["run", "status", "age", "kind", "by", "task", "score", "hypothesis"]) + "\n" + head)
                if trows else "no runs")
 
 
 def cmd_show(a):
-    from kx.runs.progress import artifacts as list_artifacts, curves, snapshot
+    from kx.runs.progress import artifacts as list_artifacts, curve_summary, sampled, snapshot
     with S() as st:
         r = st.get_run(st.resolve(a.run))
         d = dict(r)
-        d["run"] = rid(r["id"])
+        d["run"] = r["id"]
         for k in ("config", "env", "metrics"):
             d[k] = loads(d[k])
         d["command"] = loads(r["command"]) if r["command"] and r["command"].startswith("[") else r["command"]
@@ -122,26 +125,25 @@ def cmd_show(a):
                         "breakdown": loads(s["breakdown"])} for s in st.scores_for(r["id"])]
         d["notes"] = [dict(n) for n in st.notes(r["id"])]
         d["tags"] = st.tags(r["id"])
-        d["children"] = [rid(c["id"]) for c in st.all("SELECT id FROM runs WHERE parent=?", (r["id"],))]
+        d["children"] = [c["id"] for c in st.all("SELECT id FROM runs WHERE parent=?", (r["id"],))]
         d["live"] = snapshot(st, r)
-        times = {} if a.curves else None
-        cur = curves(st.run_dir(r["id"]), times)
-        d["curves"] = {k: {"points": len(v), "first": v[0][1], "last": v[-1][1], "min": min(p[1] for p in v),
-                           "max": max(p[1] for p in v), "last_step": v[-1][0]} for k, v in cur.items()}
-        if a.curves:
-            d["curve_points"], d["curve_times"] = cur, times
+        d["curves"] = curve_summary(st.run_dir(r["id"]))
+        if a.curves:  # cut to a few points per stretch of the run: its shape, extremes and restarts (progress.sampled)
+            cut = sampled(st.run_dir(r["id"]), a.chunk, a.since)
+            d["curve_points"], d["curve_times"] = cut.pop("points"), cut.pop("times")
+            d["curve_sample"] = cut
         d["artifacts"], _ = list_artifacts(st.run_dir(r["id"]))
         from kx.runs.objects import objects
         d["objects"] = objects(st.run_dir(r["id"]), preview=True)  # r.log_table, by name
         d["dir"] = str(st.run_dir(r["id"]))
         from kx.kaggle.competition import push_url
         d["pushes"] = [{**dict(x), "url": push_url(x["kind"], x["target"])} for x in
-                       st.all("SELECT kind, target, version, created, message FROM pushes WHERE run_id=? ORDER BY id",
+                       st.all("SELECT kind, target, version, created, message FROM pushes WHERE run_id=? ORDER BY created, id",
                               (r["id"],))]
         from kx.remote.execute import info as remote_info
         d["remote"] = remote_info(st, r["id"])
     lines = [bold(f"{d['run']}  {d['status']}  {d['kind']}") + dim(f"  by {d['author']} · {ago(d['created'])} ago"
-                                                                    + (f" · T{d['task']}" if d["task"] else "")),
+                                                                    + (f" · {d['task']}" if d["task"] else "")),
              f"  {d['hypothesis'] or ''}"]
     cmd = " ".join(map(shlex.quote, d["command"])) if isinstance(d["command"], list) else d["command"]
     lines.append(dim(f"  git {(d['git_sha'] or '-')[:10]}{'+dirty' if d['git_dirty'] else ''} on {d['git_branch'] or '-'}"
@@ -187,7 +189,7 @@ def cmd_show(a):
         lines += ["", bold(f"still on {d['remote']['host']}") + dim(f"  kx fetch {d['run']} [PATH ...]")]
         lines.append(table([[x["path"], f"{x['bytes'] / 1e6:.0f} MB"] for x in on_host[:20]], indent=2))
     if d["parent"] or d["children"]:
-        lines += ["", dim(f"parent {rid(d['parent']) if d['parent'] else '-'} · children {', '.join(d['children']) or '-'}")]
+        lines += ["", dim(f"parent {d['parent'] if d['parent'] else '-'} · children {', '.join(d['children']) or '-'}")]
     if d["error"]:
         lines += ["", bold("error"), "  " + d["error"][-1500:].replace("\n", "\n  ")]
     return Out(d, "\n".join(lines))
@@ -233,12 +235,12 @@ def cmd_board(a):
             if top is not None and r["id"] != top["id"]:
                 c = compare_scores(dict(top), dict(r), p["direction"], st.comp.z, p["noise"])
                 vs = {"z": c.z, "verdict": c.verdict}
-            data.append({"rank": i + 1, "run": rid(r["id"]), "value": r["value"], "se": r["se"], "n": r["n"], "task": r["task"],
+            data.append({"rank": i + 1, "run": r["id"], "value": r["value"], "se": r["se"], "n": r["n"], "task": r["task"],
                          "group": r["grp"], "group_more": g["more"], "vs_best": vs, "hypothesis": r["hypothesis"]})
-            vs_txt = "" if vs is None else (f"{vs['verdict']}" + (f" z={vs['z']:+.1f}" if vs["z"] is not None else ""))
-            trows.append([i + 1, rid(r["id"]), score(r["value"], r["se"]), r["n"] or "", vs_txt,
+            vs_txt = "" if vs is None else (vs['verdict'] + (f" z={vs['z']:+.1f}" if vs["z"] is not None else ""))
+            trows.append([i + 1, r["id"], score(r["value"], r["se"]), r["n"] or "", vs_txt,
                           (f"{r['grp']} (+{g['more']})" if g["more"] else (r["grp"] or "")),
-                          f"T{r['task']}" if r["task"] else "", r["hypothesis"] or ""])
+                          r['task'] if r["task"] else "", r["hypothesis"] or ""])
     head = bold(pid) + dim(f"  {src} · {p['direction']} · {len(rows)} run(s)")
     return Out({"protocol": pid, "rows": data},
                head + "\n" + (table(trows, ["#", "run", "score", "n", "vs #1", "group", "task", "hypothesis"]) if trows else "  no runs"))
@@ -250,13 +252,13 @@ def cmd_compare(a):
         ra, rb = st.resolve(a.a), st.resolve(a.b)
         st.get_run(ra), st.get_run(rb)
         res = compare(st, ra, rb, st.comp.z)
-    data = {"a": rid(ra), "b": rid(rb), "comparable": res.comparable,
+    data = {"a": ra, "b": rb, "comparable": res.comparable,
             "comparisons": [c.__dict__ for c in res.comparisons], "only_a": res.only_a, "only_b": res.only_b, "hints": res.hints}
-    lines = [f"is {rid(rb)} better than {rid(ra)}?"]
+    lines = [f"is {rb} better than {ra}?"]
     if res.comparisons:
         lines.append(table([[c.protocol, num(c.a), num(c.b), f"{c.delta:+.4g}", f"z={c.z:+.2f}" if c.z is not None else "",
                              f"{c.symbol} {c.verdict}", c.method] for c in res.comparisons],
-                           ["protocol", rid(ra), rid(rb), "Δ", "z", "verdict", "method"], indent=2))
+                           ["protocol", ra, rb, "Δ", "z", "verdict", "method"], indent=2))
     else:
         lines.append("  not comparable: no shared protocol")
     lines += [f"  hint: {h}" for h in res.hints]
@@ -276,16 +278,16 @@ def cmd_search(a):
         tagmap: dict[int, list[str]] = {}
         for t in st.all("SELECT run_id, tag FROM tags"):
             tagmap.setdefault(t["run_id"], []).append(t["tag"])
-        for r in st.all("SELECT id, hypothesis, config, git_branch, status, created FROM runs ORDER BY id DESC"):
+        for r in st.all("SELECT id, hypothesis, config, git_branch, status, created FROM runs ORDER BY n DESC, created DESC"):
             blob = " ".join([r["hypothesis"] or "", r["config"] or "", r["git_branch"] or "", *notes.get(r["id"], []),
                              *tagmap.get(r["id"], [])])
             if match(blob):
-                runs.append({"run": rid(r["id"]), "status": r["status"], "hypothesis": r["hypothesis"],
+                runs.append({"run": r["id"], "status": r["status"], "hypothesis": r["hypothesis"],
                              "note": (notes.get(r["id"]) or [None])[-1]})
         fnd = [f for f in findings.listing(st, all_=True) if match(f["text"] + " " + " ".join(f["tags"]))]
         tsk = [t for t in tasks.listing(st, all_=True) if match(" ".join([t["title"], t["body"] or "", t["outcome"] or ""]))]
-    data = {"runs": runs[: a.n], "findings": [{"id": f"F{f['id']}", "status": f["status"], "text": f["text"]} for f in fnd[: a.n]],
-            "tasks": [{"id": f"T{t['id']}", "status": t["status"], "result": t["result"], "title": t["title"],
+    data = {"runs": runs[: a.n], "findings": [{"id": f['id'], "status": f["status"], "text": f["text"]} for f in fnd[: a.n]],
+            "tasks": [{"id": t['id'], "status": t["status"], "result": t["result"], "title": t["title"],
                        "outcome": t["outcome"]} for t in tsk[: a.n]]}
     lines = []
     if data["findings"]:
@@ -320,7 +322,7 @@ def cmd_tag(a):
             if unknown:
                 print(f"kx: note: {', '.join(unknown)} not in comp.yaml tags ({', '.join(st.comp.tags)})", file=sys.stderr)
         t = st.tags(run_id)
-    return Out({"run": rid(run_id), "tags": t}, f"{rid(run_id)}: {', '.join(t) or 'no tags'}")
+    return Out({"run": run_id, "tags": t}, f"{run_id}: {', '.join(t) or 'no tags'}")
 
 
 def cmd_fetch(a):
@@ -340,8 +342,8 @@ def cmd_path(a):
 def cmd_reap(a):
     with S() as st:
         closed = st.reap()
-    return Out([{"run": rid(i), "why": w} for i, w in closed],
-               "\n".join(f"closed {rid(i)}: {w}" for i, w in closed) or "no dead runs")
+    return Out([{"run": i, "why": w} for i, w in closed],
+               "\n".join(f"closed {i}: {w}" for i, w in closed) or "no dead runs")
 
 
 def cmd_progress(a):
@@ -400,9 +402,13 @@ def register(cmd, group, action):
     s.add_argument("--status", choices=("running", "done", "failed"))
     s.add_argument("--tag")
     s.add_argument("--curves", action="store_true", help="include the names of the curves each run logs (JSON)")
+    s.add_argument("--config", action="store_true", help="include each run's config, reported metrics, seed and group (JSON)")
     s = cmd("show", cmd_show, "one run: scores, config, curves, notes, artifacts, error")
     s.add_argument("run")
-    s.add_argument("--curves", action="store_true", help="include every curve point (JSON)")
+    s.add_argument("--curves", action="store_true", help="include the curves (JSON), cut to their shape: the first, last, lowest "
+                   "and highest point of each stretch of the run, and every restart")
+    s.add_argument("--chunk", type=int, help=argparse.SUPPRESS)  # a live reader's last curve_sample: only what is new
+    s.add_argument("--since", type=int, default=0, help=argparse.SUPPRESS)
     s = cmd("board", cmd_board, "runs ranked under the reference protocol (or another one)")
     s.add_argument("protocol", nargs="?")
     s.add_argument("-n", type=int, default=20)

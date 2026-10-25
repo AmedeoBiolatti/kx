@@ -43,8 +43,8 @@ def test_task_worktrees_live_in_dot_kx(comp, capsys):
     code, t = run_kx("task", "add", "try it", capsys=capsys)
     with open_store() as st:  # as kx spawn makes it for a worker
         path, branch = tasks.make_worktree(st, tasks.get(st, t["id"]))
-    wt = comp / ".kx" / "worktrees" / f"T{t['id']}-try-it"
-    assert path == wt and branch == f"task/T{t['id']}-try-it" and (wt / "comp.yaml").exists()
+    wt = comp / ".kx" / "worktrees" / f"{t['id']}-try-it"
+    assert path == wt and branch == f"task/{t['id']}-try-it" and (wt / "comp.yaml").exists()
     assert (wt / "data").resolve() == (comp / ".kx" / "store" / "data").resolve()
     with open_store(wt) as st:  # from inside the worktree, the same store
         assert st.comp.store == comp / ".kx" / "store"

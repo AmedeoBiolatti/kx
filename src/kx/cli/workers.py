@@ -47,7 +47,7 @@ def cmd_workers(a):
                  "stderr_tail": stderr}
             state = "running" if not w["finished"] else f"ended {ago(w['finished'])} ago, exit {w['code']}" + \
                 (f" ({w['stop']})" if w["stop"] else "")
-            lines = [bold(f"{w['agent']} on T{w['task']}") + dim(f"  {w['id']} · {w['harness']} {w['model'] or ''} · {state}"),
+            lines = [bold(f"{w['agent']} on {w['task']}") + dim(f"  {w['id']} · {w['harness']} {w['model'] or ''} · {state}"),
                      dim(f"  {w['turns'] or 0} turns · {((w['tokens_in'] or 0) + (w['tokens_out'] or 0)):,} tokens"
                          + (f" · ${w['cost_usd']:.2f} API-equivalent" if w["cost_usd"] else "")
                          + (f" · plan 5h {w['plan_5h'] * 100:.0f}%" if w["plan_5h"] is not None else "")),
@@ -61,7 +61,7 @@ def cmd_workers(a):
         running = live(st)
         recent = [] if not a.all else [dict(r) for r in st.all("SELECT * FROM workers WHERE finished IS NOT NULL "
                                                                 "ORDER BY started DESC LIMIT ?", (a.n,))]
-    rows = [[w["id"], w["agent"], f"T{w['task']}", "running" if not w["finished"] else f"exit {w['code']}",
+    rows = [[w["id"], w["agent"], w['task'], "running" if not w["finished"] else f"exit {w['code']}",
              dur(age_s(w["started"])), f"{((w['tokens_in'] or 0) + (w['tokens_out'] or 0)):,}",
              w["stop"] or w["last_action"] or ""] for w in running + recent]
     return Out({"running": running, "recent": recent},
@@ -91,7 +91,7 @@ def cmd_wait(a):
         ws, rs, nd = snapshot()
         changed = [{"kind": "worker_finished", "id": i, "worker": n} for i, n in ws0.items() if i not in ws]
         if a.runs:
-            changed += [{"kind": "run_finished", "run": f"r{i:04d}", "hypothesis": h} for i, h in rs0.items() if i not in rs]
+            changed += [{"kind": "run_finished", "run": i, "hypothesis": h} for i, h in rs0.items() if i not in rs]
         changed += [{"kind": "needs_you", **x} for k, x in nd.items() if k not in nd0]
         if changed:
             lines = []
@@ -99,11 +99,11 @@ def cmd_wait(a):
                 for c in changed:
                     if c["kind"] == "worker_finished":
                         w = st.one("SELECT * FROM workers WHERE id=?", (c["id"],))
-                        c.update(task=f"T{w['task']}", code=w["code"], stop=w["stop"], result=(w["result"] or "")[-600:])
-                        lines.append(f"worker {w['agent']} on T{w['task']} ended (exit {w['code']}"
+                        c.update(task=w['task'], code=w["code"], stop=w["stop"], result=(w["result"] or "")[-600:])
+                        lines.append(f"worker {w['agent']} on {w['task']} ended (exit {w['code']}"
                                      + (f", {w['stop']}" if w["stop"] else "") + f"): {trunc(w['result'] or '', 300)}")
                     elif c["kind"] == "run_finished":
-                        r = st.one("SELECT status FROM runs WHERE id=?", (int(c["run"][1:]),))
+                        r = st.one("SELECT status FROM runs WHERE id=?", (c["run"],))
                         c["status"] = r["status"] if r else None
                         lines.append(f"{c['run']} {c['status']}: {trunc(c['hypothesis'] or '', 200)}")
                     else:

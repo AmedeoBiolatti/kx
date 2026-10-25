@@ -8,18 +8,17 @@ from kx.board import findings, tasks
 from kx.cli.common import Out, S, task_here
 from kx.guard import actors
 from kx.ledger.config import KxError
-from kx.ledger.store import rid
 from kx.views.text import ago, bold, dim, table, trunc
 
 
 def _task_text(t: dict, notes: list[dict] | None = None) -> str:
-    head = bold(f"T{t['id']} {t['title']}") + dim(f"  {t['status']}" + (f" · {t['result']}" if t["result"] else "")
+    head = bold(f"{t['id']} {t['title']}") + dim(f"  {t['status']}" + (f" · {t['result']}" if t["result"] else "")
                                                    + (f" · {t['owner']}" if t["owner"] else "") + f" · p{t['priority']}")
     lines = [head]
     if t.get("waiting_on"):
         lines.append(f"  waiting on: {t['waiting_on']}")
     if t["depends"]:
-        lines.append(f"  depends on: {', '.join(f'T{d}' for d in t['depends'])}")
+        lines.append(f"  depends on: {', '.join(t['depends'])}")
     if t["branch"]:
         lines.append(dim(f"  branch {t['branch']}" + (f" · worktree {t['worktree']}" if t["worktree"] else "")))
     if t["body"]:
@@ -42,39 +41,39 @@ def cmd_task(a):
                 why = (t["waiting_on"] if t["status"] == "waiting" else
                        f"after {', '.join(t['blocked_by'])}" if t["blocked_by"] else
                        (t["last_note"]["text"] if t["last_note"] else ""))
-                trows.append([f"T{t['id']}", f"p{t['priority']}", state, t["owner"] or "", trunc(t["title"], 60), why])
+                trows.append([t['id'], f"p{t['priority']}", state, t["owner"] or "", trunc(t["title"], 60), why])
             return Out(rows, table(trows, ["task", "p", "state", "owner", "title", "note"]) if trows else "no open tasks")
         if act == "add":
             t = tasks.add(st, a.title, a.body or "", a.priority, a.depends or ())
-            return Out(t, f"added T{t['id']}: {t['title']}")
+            return Out(t, f"added {t['id']}: {t['title']}")
         t_id = a.id
         if act == "show":
             t = tasks.get(st, t_id)
             n = tasks.notes(st, t_id)
-            runs = [dict(r) for r in st.all("SELECT id, status, hypothesis FROM runs WHERE task=? ORDER BY id", (t["id"],))]
+            runs = [dict(r) for r in st.all("SELECT id, status, hypothesis FROM runs WHERE task=? ORDER BY n, id", (t["id"],))]
             fnd = [dict(f) for f in st.all("SELECT id, status, text FROM findings WHERE task=?", (t["id"],))]
             text = _task_text(t, n)
             if runs:
-                text += "\n\n" + bold("runs") + "\n" + table([[rid(r["id"]), r["status"], r["hypothesis"] or ""] for r in runs], indent=2)
+                text += "\n\n" + bold("runs") + "\n" + table([[r["id"], r["status"], r["hypothesis"] or ""] for r in runs], indent=2)
             if fnd:
-                text += "\n\n" + bold("findings") + "\n" + "\n".join(f"  F{f['id']} [{f['status']}] {trunc(f['text'], 120)}" for f in fnd)
+                text += "\n\n" + bold("findings") + "\n" + "\n".join(f"  {f['id']} [{f['status']}] {trunc(f['text'], 120)}" for f in fnd)
             return Out({**t, "notes": n, "runs": runs, "findings": fnd}, text)
         if act == "start":
             t = tasks.start(st, t_id)
-            return Out(t, f"T{t['id']} is active ({t['owner']}): your runs are linked to it until you finish it")
+            return Out(t, f"{t['id']} is active ({t['owner']}): your runs are linked to it until you finish it")
         if act == "note":
             t = tasks.note(st, t_id, " ".join(a.text))
-            return Out(t, f"noted on T{t['id']}")
+            return Out(t, f"noted on {t['id']}")
         if act == "wait":
             t = tasks.wait(st, t_id, a.on, a.note or "")
-            return Out(t, f"T{t['id']} waits on {a.on}")
+            return Out(t, f"{t['id']} waits on {a.on}")
         if act == "done":
             t = tasks.finish(st, t_id, a.result, a.outcome)
-            hint = f"\n  merge its branch: kx task merge T{t['id']}" if t["worktree"] and not actors.current().worker else ""
-            return Out(t, f"T{t['id']} done ({t['result']}){hint}")
+            hint = f"\n  merge its branch: kx task merge {t['id']}" if t["worktree"] and not actors.current().worker else ""
+            return Out(t, f"{t['id']} done ({t['result']}){hint}")
         if act == "reopen":
             t = tasks.reopen(st, t_id)
-            return Out(t, f"T{t['id']} is open again")
+            return Out(t, f"{t['id']} is open again")
         if act == "edit":
             t = tasks.edit(st, t_id, title=a.title, body=a.body, priority=a.priority, depends=a.depends)
             return Out(t, _task_text(t))
@@ -87,19 +86,19 @@ def cmd_task(a):
 
 def _finding_line(f: dict) -> str:
     tags = f" [{', '.join(f['tags'])}]" if f["tags"] else ""
-    ev = f" (evidence {', '.join(rid(e) for e in f['evidence'])})" if f["evidence"] else ""
-    return f"F{f['id']} {f['status']}{tags}: {f['text']}{dim(ev)}"
+    ev = f" (evidence {', '.join(f['evidence'])})" if f["evidence"] else ""
+    return f"{f['id']} {f['status']}{tags}: {f['text']}{dim(ev)}"
 
 
 def cmd_finding(a):
     with S() as st:
         act = a.action
         if act == "add":
-            f = findings.add(st, a.text, a.evidence or (), a.tag or (), tasks.parse_id(a.task) if a.task else task_here())
+            f = findings.add(st, a.text, a.evidence or (), a.tag or (), st.resolve(a.task, "tasks") if a.task else task_here(st))
             unknown = [t for t in f["tags"] if st.comp.tags and t not in st.comp.tags]
             if unknown:
                 print(f"kx: note: {', '.join(unknown)} not in comp.yaml tags", file=sys.stderr)
-            return Out(f, f"added F{f['id']}")
+            return Out(f, f"added {f['id']}")
         if act == "list":
             fs = findings.listing(st, all_=a.all, tag=a.tag)
             return Out(fs, "\n".join(_finding_line(f) for f in fs) or "no findings")
@@ -112,7 +111,7 @@ def cmd_finding(a):
             return Out(f, _finding_line(f) + extra)
         if act in ("withdraw", "supersede"):
             status = {"withdraw": "withdrawn", "supersede": "superseded"}[act]
-            f = findings.review(st, a.id, status, a.note or "", findings.parse_id(a.by) if getattr(a, "by", None) else None)
+            f = findings.review(st, a.id, status, a.note or "", getattr(a, "by", None))
             return Out(f, _finding_line(f))
     raise KxError(f"unknown finding action {act}")
 

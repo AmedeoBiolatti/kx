@@ -15,7 +15,7 @@ def gate(actor, argv: list[str], summary: str, preview: dict, *, yes: bool, task
     """Return when the action may go ahead; otherwise raise KxError(code=3) with the preview."""
     command = "kx " + " ".join(shlex.quote(a) for a in argv if a not in STRIP) + " --yes"
     if actor.worker:
-        wait = f'kx task wait T{task} --on {shlex.quote(command)}' if task else "your task's outcome"
+        wait = f'kx task wait {task} --on {shlex.quote(command)}' if task else "your task's outcome"
         raise KxError(f"workers do not send to Kaggle: {summary}", code=3,
                       fix=f"leave it to your person: record it with `{wait}` and end your session",
                       data={"preview": preview, "command": command})

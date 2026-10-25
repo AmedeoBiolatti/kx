@@ -1,6 +1,7 @@
 """Reported run progress and bounded, tolerant reads of live metric files."""
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import os
@@ -173,37 +174,144 @@ def _memo(kind, path, compute, keep):
     return hit[1]
 
 
-def curves(directory, times=None):
-    """{metric: [[step, value], ...]} in the order logged (a step that goes back starts a new pass). With a dict for
-    `times`, it gets {metric: [unix seconds or None, ...]} alongside, from each record's ts. The lists are shared
-    with later calls: read them, do not change them."""
-    path = Path(directory) / 'metrics.jsonl'
-    if times is None:
-        return _memo('curves', path, lambda: _curves(path, None), keep=4)
+class _Curves:
+    """The whole of one metrics.jsonl, parsed once and then only what is appended to it: a live run's file grows by
+    a few lines between two reads. `at[k]` is the record (step line) each point of k came from, `summary[k]` its
+    count, first, last, min, max and last step, kept up to date as points arrive."""
 
-    def both():
-        t = {}
-        return _curves(path, t), t
-    result, got = _memo('curves+times', path, both, keep=4)
-    times.update(got)
-    return result
+    def __init__(self):
+        self.stamp, self.offset, self.records = None, 0, 0
+        self.pts, self.times, self.at, self.summary = {}, {}, {}, {}
+        self.picks = {}  # chunk size -> (chunks done, {metric: the picked indices in them}), see sampled()
 
-
-def _curves(path, times):
-    result = {}
-    for record in records(path, max_bytes=2 * 1024 * 1024):
-        if not number(record.get('step')):
-            continue
-        t = None
-        if times is not None:
+    def read(self, path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            self.__init__()
+            return self
+        if self.stamp and (self.stamp[0] != st.st_ino or st.st_size < self.offset):
+            self.__init__()  # replaced or cut: read from the start
+        if self.stamp == (st.st_ino, st.st_size, st.st_mtime_ns):
+            return self
+        try:
+            with open(path, 'rb') as f:
+                f.seek(self.offset)
+                raw = f.read()
+        except OSError:
+            return self
+        end = raw.rfind(b'\n') + 1  # a line still being written is read next time, whole
+        self.offset += end
+        self.stamp = (st.st_ino, st.st_size, st.st_mtime_ns)
+        for line in raw[:end].splitlines():
+            try:
+                record = json.loads(line)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(record, dict) or not number(record.get('step')):
+                continue
             ts = parse_ts(record.get('ts'))
             t = ts.timestamp() if ts else None
-        for key, value in record.items():
-            if key not in RESERVED and number(value):
-                result.setdefault(key, []).append([record['step'], value])
-                if times is not None:
-                    times.setdefault(key, []).append(t)
-    return result
+            step, i = record['step'], self.records
+            self.records += 1
+            for key, value in record.items():
+                if key in RESERVED or not number(value):
+                    continue
+                if key not in self.pts:
+                    self.pts[key], self.times[key], self.at[key] = [], [], []
+                    self.summary[key] = {'points': 0, 'first': value, 'last': value, 'min': value, 'max': value, 'last_step': step}
+                self.pts[key].append([step, value])
+                self.times[key].append(t)
+                self.at[key].append(i)
+                s = self.summary[key]
+                s['points'] += 1
+                s['last'], s['last_step'] = value, step
+                s['min'], s['max'] = min(s['min'], value), max(s['max'], value)
+        return self
+
+
+_CURVES = {}  # path -> _Curves, least recently used first
+
+
+def _parsed(directory, keep=12):
+    path = Path(directory) / 'metrics.jsonl'
+    c = _CURVES.pop(path, None) or _Curves()
+    _CURVES[path] = c
+    while len(_CURVES) > keep:
+        del _CURVES[next(iter(_CURVES))]
+    return c.read(path)
+
+
+def curves(directory, times=None):
+    """{metric: [[step, value], ...]} in the order logged (a step that goes back starts a new pass), from the whole
+    file. With a dict for `times`, it gets {metric: [unix seconds or None, ...]} alongside, from each record's ts.
+    The lists are shared with later calls: read them, do not change them."""
+    c = _parsed(directory)
+    if times is not None:
+        times.update(c.times)
+    return c.pts
+
+
+def curve_summary(directory):
+    """{metric: {points, first, last, min, max, last_step}} over the whole file, without going through the points."""
+    return {k: dict(v) for k, v in _parsed(directory).summary.items()}
+
+
+SAMPLE_CHUNKS = 512
+
+
+def sampled(directory, chunk=None, start=0, chunks=SAMPLE_CHUNKS):
+    """The curves cut down for drawing. The file's records go in aligned chunks of `chunk` records (a power of two:
+    at most `chunks` of them); of each chunk and metric come its first and last point, its lowest and highest, and
+    both sides of each restart (a step going back), so a line keeps its shape, its extremes and its passes. A chunk
+    once full never changes until the size doubles: a live reader that has the chunks before `start` (at this
+    `chunk` size) gets only the ones from there. `done[k]`: how many of the points sent lie in full chunks."""
+    c = _parsed(directory)
+    size = 1
+    while c.records > size * chunks:
+        size *= 2
+    if chunk != size:
+        start = 0
+    full = c.records // size
+    known, picks = c.picks.get(size, (0, {}))
+    if known < full:  # full chunks are picked once
+        for k, at in c.at.items():
+            picks.setdefault(k, []).extend(_pick(c.pts[k], at, size, known, full))
+        c.picks = {size: (full, picks)}  # an old size is not asked for again
+    points, times, done = {}, {}, {}
+    for k, at in c.at.items():
+        mine = picks.get(k, [])
+        lo = bisect.bisect_left(mine, bisect.bisect_left(at, start * size))
+        idx = mine[lo:] + _pick(c.pts[k], at, size, max(full, start), full + 1)
+        if not idx:
+            continue
+        points[k] = [c.pts[k][i] for i in idx]
+        times[k] = [c.times[k][i] for i in idx]
+        done[k] = len(mine) - lo
+    return {'chunk': size, 'start': start, 'full': full, 'records': c.records, 'points': points, 'times': times, 'done': done}
+
+
+def _pick(pts, at, size, first, last):
+    """The indices of pts to keep from the chunks first..last-1 (see sampled), in order."""
+    out = []
+    i = bisect.bisect_left(at, first * size)
+    end = bisect.bisect_left(at, last * size)
+    while i < end:
+        j = bisect.bisect_left(at, (at[i] // size + 1) * size, i, end)
+        keep = {i, j - 1}
+        lo = hi = i
+        for q in range(i + 1, j):
+            v = pts[q][1]
+            if v < pts[lo][1]:
+                lo = q
+            if v > pts[hi][1]:
+                hi = q
+            if pts[q][0] < pts[q - 1][0]:
+                keep |= {q - 1, q}
+        keep |= {lo, hi}
+        out.extend(sorted(keep))
+        i = j
+    return out
 
 
 def curve_names(directory, max_bytes=64 * 1024):

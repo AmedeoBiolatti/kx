@@ -55,7 +55,13 @@ class Comp:
 
     @property
     def db_path(self) -> Path:
-        return self.store / "ledger.sqlite"
+        """The SQLite cache of the logs (kx.ledger.store): disposable, rebuilt from log_dir."""
+        return self.store / "cache.sqlite"
+
+    @property
+    def log_dir(self) -> Path:
+        """The ledger itself: one append-only log per writer (user@machine)."""
+        return self.store / "log"
 
     @property
     def runs_dir(self) -> Path:

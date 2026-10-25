@@ -1,8 +1,14 @@
 """Caps on what costs something: submissions, Kaggle GPU hours, local GPU hours, worker tokens, paid remote hosts.
 
-comp.yaml `budgets:` holds team caps (`<metric>_per_<window>`) and per-worker caps (`workers: {name: {...}}`). A cap is
+comp.yaml `budgets:` holds caps (`<metric>_per_<window>`) and per-worker caps (`workers: {name: {...}}`). A cap is
 checked before the action; an action over a cap is refused with when it frees up (exit code 4): wait, or raise the
 cap. Kaggle's own limits (daily submissions) are not budgets and always apply.
+
+comp.yaml is shared by everyone on the project, so each cap counts what its metric is paid from (SCOPES): the team's
+submission slots, a person's Kaggle GPU quota, worker tokens and paid hosts (all machines with their machine.yaml
+`user:`), this machine's GPUs. `budgets.scope: {tokens: team}` changes one. A worker's own cap counts that worker on
+this machine. Usage comes from the logs this machine has: another machine's since its last `kx sync` is not counted
+yet.
 """
 
 from __future__ import annotations
@@ -20,6 +26,9 @@ METRICS = {
     "cloud_usd": "paid remote hosts (USD)",  # kx exec --on HOST: wall time x the host's usd_per_hour
 }
 WINDOWS = {"day": "today (UTC)", "week": "in the last 7 days"}
+SCOPES = {"submissions": "team", "kaggle_gpu_hours": "person", "gpu_hours": "machine", "tokens": "person",
+          "cloud_usd": "person"}
+SCOPE_NAMES = ("team", "person", "machine")
 
 
 def parse_key(key: str) -> tuple[str, str] | None:
@@ -35,7 +44,14 @@ def validate(budgets: dict, where) -> None:
                               fix="use <metric>_per_<day|week> with metric one of " + ", ".join(METRICS))
             if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
                 raise KxError(f"{where}: {ctx}{k} must be a non-negative number")
-    check({k: v for k, v in budgets.items() if k != "workers"}, "budgets.")
+    check({k: v for k, v in budgets.items() if k not in ("workers", "scope")}, "budgets.")
+    scope = budgets.get("scope") or {}
+    if not isinstance(scope, dict):
+        raise KxError(f"{where}: budgets.scope must map metrics to {' | '.join(SCOPE_NAMES)}")
+    for m, v in scope.items():
+        if m not in METRICS or v not in SCOPE_NAMES:
+            raise KxError(f"{where}: budgets.scope.{m}: {v!r}",
+                          fix=f"a metric ({', '.join(METRICS)}) and one of {', '.join(SCOPE_NAMES)}")
     workers = budgets.get("workers") or {}
     if not isinstance(workers, dict):
         raise KxError(f"{where}: budgets.workers must map worker names to caps")
@@ -45,36 +61,60 @@ def validate(budgets: dict, where) -> None:
         check(caps, f"budgets.workers.{name}.")
 
 
+def scope_of(store: Store, metric: str) -> str:
+    return ((store.comp.budgets.get("scope") or {}).get(metric)) or SCOPES[metric]
+
+
+def _scope_label(store: Store, scope: str) -> str:
+    return {"team": "team", "person": store.writer.split("@", 1)[0], "machine": store.writer}[scope]
+
+
 def caps(store: Store, actor=None) -> list[dict]:
-    """The caps that apply to actor (team caps always; its own when it is a worker with some)."""
+    """The caps that apply to actor (the shared ones always; its own when it is a worker with some)."""
     b = store.comp.budgets
-    out = [{"scope": "team", "who": None, "key": k, "metric": parse_key(k)[0], "window": parse_key(k)[1], "cap": float(v)}
-           for k, v in b.items() if k != "workers"]
+    out = []
+    for k, v in b.items():
+        if k in ("workers", "scope"):
+            continue
+        m, w = parse_key(k)
+        sc = scope_of(store, m)
+        out.append({"scope": _scope_label(store, sc), "within": sc, "who": None, "key": k, "metric": m, "window": w,
+                    "cap": float(v)})
     if actor is not None and actor.worker:
         for k, v in ((b.get("workers") or {}).get(actor.name) or {}).items():
             m, w = parse_key(k)
-            out.append({"scope": actor.name, "who": actor.name, "key": k, "metric": m, "window": w, "cap": float(v)})
+            out.append({"scope": actor.name, "within": "machine", "who": actor.name, "key": k, "metric": m,
+                        "window": w, "cap": float(v)})
     return out
 
 
-def used(store: Store, metric: str, window: str, who: str | None = None) -> float:
-    sql, params = "SELECT COALESCE(SUM(amount), 0) FROM usage WHERE metric=? AND ts >= ?", [metric, since(window)]
+def _where(store: Store, metric: str, window: str, who: str | None, within: str | None) -> tuple[str, list]:
+    sql, params = " FROM usage WHERE metric=? AND ts >= ?", [metric, since(window)]
+    within = within or scope_of(store, metric)
+    if within == "machine":  # under its name now and the ones it had
+        sql += f" AND writer IN ({','.join('?' * len(store.writers))})"
+        params += store.writers
+    elif within == "person":
+        sql += " AND writer LIKE ? ESCAPE '\\'"
+        params.append(store.writer.split("@", 1)[0].replace("%", "\\%").replace("_", "\\_") + "@%")
     if who:
         sql += " AND actor=?"
         params.append(who)
-    return float(store.one(sql, params)[0])
+    return sql, params
 
 
-def frees_up(store: Store, metric: str, window: str, who: str | None = None) -> str:
+def used(store: Store, metric: str, window: str, who: str | None = None, within: str | None = None) -> float:
+    sql, params = _where(store, metric, window, who, within)
+    return float(store.one("SELECT COALESCE(SUM(amount), 0)" + sql, params)[0])
+
+
+def frees_up(store: Store, metric: str, window: str, who: str | None = None, within: str | None = None) -> str:
     t = datetime.now(timezone.utc)
     if window == "day":
         reset = (t + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         return f"resets at 00:00 UTC (in {_dur((reset - t).total_seconds())})"
-    sql, params = "SELECT ts FROM usage WHERE metric=? AND ts >= ?", [metric, since(window)]
-    if who:
-        sql += " AND actor=?"
-        params.append(who)
-    row = store.one(sql + " ORDER BY ts LIMIT 1", params)
+    sql, params = _where(store, metric, window, who, within)
+    row = store.one("SELECT ts" + sql + " ORDER BY ts LIMIT 1", params)
     oldest = parse_ts(row["ts"]) if row else None
     if oldest is None:
         return "rolling 7 days"
@@ -99,9 +139,9 @@ def fmt(metric: str, v: float) -> str:
 def report(store: Store, actor=None) -> list[dict]:
     out = []
     for c in caps(store, actor):
-        u = used(store, c["metric"], c["window"], c["who"])
+        u = used(store, c["metric"], c["window"], c["who"], c["within"])
         out.append({**c, "used": u, "left": max(0.0, c["cap"] - u),
-                    "frees_up": frees_up(store, c["metric"], c["window"], c["who"])})
+                    "frees_up": frees_up(store, c["metric"], c["window"], c["who"], c["within"])})
     return out
 
 
@@ -112,11 +152,11 @@ def check(store: Store, actor, cost: dict) -> None:
         amount = cost.get(c["metric"])
         if not amount:
             continue
-        u = used(store, c["metric"], c["window"], c["who"])
+        u = used(store, c["metric"], c["window"], c["who"], c["within"])
         if u + amount > c["cap"] + 1e-9:
             over.append(f"{c['scope']} {c['key']}={fmt(c['metric'], c['cap'])}: {fmt(c['metric'], u)} used "
                         f"{WINDOWS[c['window']]}, this needs {fmt(c['metric'], amount)}; "
-                        f"{frees_up(store, c['metric'], c['window'], c['who'])}")
+                        f"{frees_up(store, c['metric'], c['window'], c['who'], c['within'])}")
     if over:
         raise KxError("over budget: " + "; ".join(over), code=4,
                       fix="wait for it to free up" if actor.worker else "wait, or raise the cap in comp.yaml budgets:",
@@ -125,4 +165,5 @@ def check(store: Store, actor, cost: dict) -> None:
 
 def charge(store: Store, actor, metric: str, amount: float, ref: str | None = None):
     if amount:
-        store.x("INSERT INTO usage VALUES (?,?,?,?,?)", (now(), actor.name, metric, float(amount), ref))
+        store.insert("usage", {"ts": now(), "actor": actor.name, "writer": store.writer, "metric": metric,
+                               "amount": float(amount), "ref": ref})

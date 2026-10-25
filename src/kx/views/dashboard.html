@@ -241,6 +241,16 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 var(--mono
 .tip .v { font-weight: 650; font-size: 13px; font-variant-numeric: tabular-nums; }
 .tip .row { display: flex; align-items: center; gap: 8px; }
 .tip .t { color: var(--muted); margin-bottom: 4px; overflow-wrap: anywhere; }
+.chart .unzoom { position: absolute; top: 2px; right: 18px; z-index: 2; font-size: 11.5px; padding: 0 8px; }
+.chart svg rect.hit { cursor: crosshair; }
+th button.sort { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+th button.sort[data-dir]::after { content: attr(data-dir); margin-left: 3px; color: var(--muted); }
+.colpick { position: relative; }
+.colpick > div { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; background: var(--raised); border: 1px solid var(--border); border-radius: 10px; padding: 8px; box-shadow: var(--shadow-lg); width: 320px; max-height: 360px; overflow: auto; }
+.colpick label { display: flex; gap: 6px; align-items: center; font-family: var(--mono); font-size: 12px; padding: 1px 0; }
+.colpick label[hidden] { display: none; }
+.scatter-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; font-size: 12.5px; }
+.scatter-bar select { max-width: 260px; }
 .pick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; }
 .pick .chip { cursor: pointer; border: 1px solid transparent; font-family: var(--mono); }
 .pick .chip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
@@ -349,7 +359,7 @@ const TOKEN = "__KX_TOKEN__";
 let COMP = new URLSearchParams(location.search).get("comp") || "__KX_DEFAULT__";
 const TABS = [["status", "Status"], ["training", "Training"], ["runs", "Runs"], ["tasks", "Tasks"], ["findings", "Findings"], ["subs", "Submissions"]];
 let TAB = (location.hash.slice(1).split("/")[0]) || "status";
-const state = { compare: [], runsQuery: "", runsProtocol: "", runsMode: "board", tasksAll: false, tasksMode: "list", findAll: false, findTag: "", lbProtocol: "", histProtocol: "", metricQuery: "" };
+const state = { compare: [], runsQuery: "", runsProtocol: "", runsMode: "all", runsN: 300, runsSort: { key: "n", dir: -1 }, colsOpen: false, scatter: {}, tasksAll: false, tasksMode: "list", findAll: false, findTag: "", lbProtocol: "", histProtocol: "", metricQuery: "" };
 
 // -- tiny DOM helpers (text always via textContent) -----------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -378,8 +388,8 @@ function fmt(v, d = 4) { if (v == null) return "–"; if (typeof v !== "number")
 function score(v, se) { return v == null ? "–" : fmt(v) + (se != null ? ` ±${fmt(se, 2)}` : ""); }
 function ago(ts) { if (!ts) return "–"; const s = (Date.now() - new Date(ts).getTime()) / 1000; return dur(s); }
 function dur(s) { if (s == null) return "–"; s = Math.max(0, s); if (s < 60) return `${s | 0}s`; if (s < 3600) return `${(s / 60) | 0}m`; if (s < 86400) return `${(s / 3600) | 0}h${String(((s % 3600) / 60) | 0).padStart(2, "0")}`; return `${(s / 86400) | 0}d${((s % 86400) / 3600) | 0}h`; }
-function compact(v) { const a = Math.abs(v); if (a >= 1e9) return (v / 1e9).toFixed(1) + "B"; if (a >= 1e6) return (v / 1e6).toFixed(1) + "M"; if (a >= 1e4) return (v / 1e3).toFixed(0) + "K"; return fmt(v, 3); }
-function rid(n) { return "r" + String(n).padStart(4, "0"); }
+function compact(v) { const a = Math.abs(v); if (a >= 1e9) return fmt(v / 1e9, 3) + "B"; if (a >= 1e6) return fmt(v / 1e6, 3) + "M"; if (a >= 1e4) return fmt(v / 1e3, 3) + "K"; return fmt(v, 3); }
+function rid(n) { return typeof n === "string" && isNaN(n) ? n : "r" + String(n).padStart(4, "0"); }  // a run id as is; a number (a chart axis) as r0012
 
 const RUN_KIND = { done: "good", failed: "critical", running: "active" };
 const TASK_KIND = { active: "active", waiting: "warning", open: "neutral", done: "good", dropped: "neutral" };
@@ -414,6 +424,7 @@ function niceTicks(lo, hi, n = 4) {
   const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toPrecision(10));
   return out;
 }
+function intTicks(x0, x1, n) { return [...new Set(niceTicks(x0, x1, n).map(Math.round))].filter(v => v >= x0 && v <= x1); }  // runs: no r0074 twice
 function dayTicks(x0, x1, n) { const step = Math.max(1, Math.ceil((x1 - x0) / n)); const out = []; for (let v = Math.ceil(x0); v <= x1 + 1e-9; v += step) out.push(v); return out; }
 function day(ts) { return new Date(ts).getTime() / 86400000; }
 function dayFmt(d) { return new Date(d * 86400000).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
@@ -423,7 +434,11 @@ function nearestPoint(points, x) {  // within the series' own range only: a run 
   for (const p of points) { lo = Math.min(lo, p[0]); hi = Math.max(hi, p[0]); if (!best || Math.abs(p[0] - x) < Math.abs(best[0] - x)) best = p; }
   return x < lo || x > hi ? null : best;
 }
-function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", title = "", tipTitle, refs = [], invertY = false, xTicks = null, yTickFmt = compact, xPad = 1, legend = true, nearest = false }) {
+// Drag across a chart with a zoomKey to zoom into that x range (kept across refreshes, under that key); a double
+// click or the button goes back to all of it.
+const zooms = new Map();
+let clipIds = 0;
+function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", title = "", tipTitle, refs = [], invertY = false, xTicks = null, yTickFmt = compact, xPad = 1, legend = true, nearest = false, zoomKey = null }) {
   const wrap = h("div", { class: "chart" });
   const all = series.flatMap(sr => sr.points);
   if (!all.length) { wrap.append(h("div", { class: "empty" }, "no data")); return wrap; }
@@ -432,7 +447,8 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
   if (legend && keyed.length > 1) wrap.append(h("div", { class: "legend" }, keyed.map(sr => h("span", {}, seriesKey(sr), sr.name))));
   const yv = p => p.length > 2 ? `${yFmt(Math.min(p[1], p[2]))}–${yFmt(Math.max(p[1], p[2]))}` : yFmt(p[1]);
   const xs = all.map(p => p[0]), ys = [...all.flatMap(p => p.length > 2 ? [p[1], p[2]] : [p[1]]), ...refs.map(r => r.y)];
-  const uniq = [...new Set(shown.flatMap(sr => sr.points).map(p => p[0]))].sort((a, b) => a - b);
+  const allUniq = [...new Set(shown.flatMap(sr => sr.points).map(p => p[0]))].sort((a, b) => a - b);
+  let uniq = allUniq;
   const plot = h("div", { style: `position:relative;min-height:${height}px` });  // its height before it is drawn (next frame): a refresh does not move the page
   wrap.append(plot);
   let lastW = 0;
@@ -442,7 +458,17 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
   plot.replaceChildren();
   const H = height, m = { l: 52, r: 16, t: 10, b: 28 };
   let x0 = lo(xs), x1 = hi(xs); if (x0 === x1) { x0 -= xPad; x1 += xPad; }
-  let ylo = lo(ys), yhi = hi(ys);
+  const z = zoomKey && zooms.get(zoomKey);
+  let inView = ys;
+  uniq = allUniq;
+  if (z) {  // the y range of what is in view
+    [x0, x1] = z;
+    const vis = all.filter(p => p[0] >= x0 && p[0] <= x1);
+    if (vis.length) inView = [...vis.flatMap(p => p.length > 2 ? [p[1], p[2]] : [p[1]]), ...refs.map(r => r.y)];
+    uniq = allUniq.filter(v => v >= x0 && v <= x1);
+    if (!uniq.length) uniq = allUniq;
+  }
+  let ylo = lo(inView), yhi = hi(inView);
   if (ylo === yhi) { const pad = Math.abs(ylo) * 0.1 || 1; ylo -= pad; yhi += pad; }  // one value: a range around it
   const yt = niceTicks(ylo, yhi);
   if (yt.length > 1) { const st = yt[1] - yt[0]; if (yt[yt.length - 1] < yhi) yt.push(+(yt[yt.length - 1] + st).toPrecision(10)); if (yt[0] > ylo) yt.unshift(+(yt[0] - st).toPrecision(10)); }  // a labelled tick past each end
@@ -468,28 +494,46 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
     lastY[side] = Y(r.y);
     const tx = s("text", { x: side === "right" ? W - m.r : m.l + 4, y: Y(r.y) - 4, "text-anchor": side === "right" ? "end" : "start", "font-size": 10.5, fill: r.color || "var(--muted)" }); tx.textContent = r.label; svg.append(tx);
   }
-  for (const v of xt) { const tx = s("text", { x: X(v), y: H - m.b + 16, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }); tx.textContent = xFmt(v); svg.append(tx); }
+  let prevX = null;
+  for (const v of xt) { if (xFmt(v) === prevX) continue; prevX = xFmt(v); const tx = s("text", { x: X(v), y: H - m.b + 16, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }); tx.textContent = xFmt(v); svg.append(tx); }
   if (xLabel) { const tx = s("text", { x: W - m.r, y: H - 2, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }); tx.textContent = xLabel; svg.append(tx); }
+  const clipId = `clip${++clipIds}`, clip = s("clipPath", { id: clipId });
+  clip.append(s("rect", { x: m.l - 6, y: 0, width: W - m.l - m.r + 12, height: H - m.b + 4 }));  // a dot at the edge stays whole
+  const lines = s("g", { "clip-path": `url(#${clipId})` });
+  svg.append(clip, lines);
   for (const sr of series) {
     const pts = [...sr.points].sort((a, b) => a[0] - b[0]);
     if (sr.kind === "band") {  // points [x, edge, other]: shaded between the two, dotted along the edge
-      svg.append(s("path", { d: "M" + [...pts.map(p => `${X(p[0])},${Y(p[2])}`), ...[...pts].reverse().map(p => `${X(p[0])},${Y(p[1])}`)].join("L") + "Z", fill: sr.color, "fill-opacity": 0.1, stroke: "none" }));
-      svg.append(s("path", { d: "M" + pts.map(p => `${X(p[0])},${Y(p[1])}`).join("L"), fill: "none", stroke: sr.color, "stroke-width": 1.5, "stroke-dasharray": "1.5 3.5", "stroke-linecap": "round", opacity: 0.7 }));
+      lines.append(s("path", { d: "M" + [...pts.map(p => `${X(p[0])},${Y(p[2])}`), ...[...pts].reverse().map(p => `${X(p[0])},${Y(p[1])}`)].join("L") + "Z", fill: sr.color, "fill-opacity": 0.1, stroke: "none" }));
+      lines.append(s("path", { d: "M" + pts.map(p => `${X(p[0])},${Y(p[1])}`).join("L"), fill: "none", stroke: sr.color, "stroke-width": 1.5, "stroke-dasharray": "1.5 3.5", "stroke-linecap": "round", opacity: 0.7 }));
     } else if (sr.kind === "dots") {
-      for (const p of pts) svg.append(s("circle", { cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }));
+      for (const p of pts) lines.append(s("circle", { cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }));
     } else {
       let d = "";
       pts.forEach((p, i) => { if (i === 0) d += `M${X(p[0])},${Y(p[1])}`; else if (sr.kind === "step") d += `H${X(p[0])}V${Y(p[1])}`; else d += `L${X(p[0])},${Y(p[1])}`; });
-      svg.append(s("path", { d, fill: "none", stroke: sr.color, "stroke-width": sr.thin ? 1.5 : 2, "stroke-linejoin": "round", "stroke-linecap": "round", "stroke-dasharray": sr.dotted ? "1.5 3.5" : null, opacity: sr.aside ? 0.4 : null }));
+      lines.append(s("path", { d, fill: "none", stroke: sr.color, "stroke-width": sr.thin ? 1.5 : 2, "stroke-linejoin": "round", "stroke-linecap": "round", "stroke-dasharray": sr.dotted ? "1.5 3.5" : null, opacity: sr.aside ? 0.4 : null }));
       const last = pts[pts.length - 1];
-      if (!sr.dotted && !sr.aside) svg.append(s("circle", { cx: X(last[0]), cy: Y(last[1]), r: 4, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }));
-      if (sr.endLabel) { const tx = s("text", { x: Math.min(X(last[0]) + 8, W - m.r), y: Y(last[1]) - 8, "text-anchor": X(last[0]) > W - 90 ? "end" : "start", "font-size": 11, fill: "var(--ink-2)" }); tx.textContent = sr.endLabel(last); svg.append(tx); }
+      if (!sr.dotted && !sr.aside) lines.append(s("circle", { cx: X(last[0]), cy: Y(last[1]), r: 4, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }));
+      if (sr.endLabel) { const tx = s("text", { x: Math.min(X(last[0]) + 8, W - m.r), y: Y(last[1]) - 8, "text-anchor": X(last[0]) > W - 90 ? "end" : "start", "font-size": 11, fill: "var(--ink-2)" }); tx.textContent = sr.endLabel(last); lines.append(tx); }
     }
   }
   const cross = s("line", { y1: m.t, y2: H - m.b, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden" });
   svg.append(cross);
-  const hit = s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent", tabindex: 0 });
-  svg.append(hit);
+  const hit = s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent", tabindex: 0, class: zoomKey ? "hit" : null });
+  const band = s("rect", { y: m.t, height: H - m.t - m.b, fill: "var(--accent)", "fill-opacity": 0.12, visibility: "hidden", "pointer-events": "none" });
+  svg.append(band, hit);
+  const toX = clientX => { const r = svg.getBoundingClientRect(); return Math.max(m.l, Math.min(W - m.r, (clientX - r.left) / r.width * W)); };
+  const fromX = px => x0 + (px - m.l) / (W - m.l - m.r) * (x1 - x0);
+  let drag = null;
+  if (zoomKey) {
+    hit.addEventListener("pointerdown", e => { if (e.button === 0) { drag = toX(e.clientX); hit.setPointerCapture(e.pointerId); } });
+    hit.addEventListener("pointerup", e => {
+      if (drag == null) return;
+      const a = drag, b = toX(e.clientX); drag = null; band.setAttribute("visibility", "hidden");
+      if (Math.abs(b - a) > 6) { zooms.set(zoomKey, [fromX(Math.min(a, b)), fromX(Math.max(a, b))]); draw(W); }
+    });
+    hit.addEventListener("dblclick", () => { if (zooms.delete(zoomKey)) draw(W); });
+  }
   const tip = h("div", { class: "tip", style: "display:none" });
   function show(clientX) {
     const r = svg.getBoundingClientRect(), vx = (clientX - r.left) / r.width * W;
@@ -507,16 +551,21 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
     tip.style.display = "block";
     const px = X(best) / W * r.width; tip.style.left = Math.min(px + 12, r.width - tip.offsetWidth - 4) + "px"; tip.style.top = "8px";
   }
-  hit.addEventListener("pointermove", e => show(e.clientX));
+  hit.addEventListener("pointermove", e => {
+    if (drag != null) { const b = toX(e.clientX); band.setAttribute("x", Math.min(drag, b)); band.setAttribute("width", Math.abs(b - drag)); band.setAttribute("visibility", "visible"); }
+    show(e.clientX);
+  });
   hit.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
   hit.addEventListener("focus", () => { const r = svg.getBoundingClientRect(); show(r.left + r.width - 20); });
   hit.addEventListener("blur", () => { tip.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
   plot.append(svg, tip);
+  if (z) plot.append(h("button", { class: "btn unzoom", title: "Show all of it (or double-click the chart)", onclick: () => { zooms.delete(zoomKey); draw(W); } }, "reset zoom"));
   }
   const tv = h("details", { class: "table-view" }, h("summary", {}, "table"));
   tv.addEventListener("toggle", () => {
     if (tv.open && tv.childElementCount === 1) tv.append(table([[xLabel || "x"], ...shown.map(sr => [sr.name, "num"])],
-      uniq.map(x => [xFmt(x), ...shown.map(sr => { const p = sr.points.find(q => q[0] === x); return p ? yv(p) : ""; })])));
+      (() => { const at = shown.map(sr => new Map(sr.points.map(p => [p[0], p])));
+        return allUniq.map(x => [xFmt(x), ...at.map(m => { const p = m.get(x); return p ? yv(p) : ""; })]); })()));
   });
   wrap.append(tv);
   return wrap;
@@ -599,14 +648,67 @@ function rateOf(pass) {  // per second, over the last points that have times
 }
 function perSec(r) { return r == null ? "–" : r >= 1 ? `${compact(r)}/s` : r * 60 >= 1 ? `${fmt(r * 60, 3)}/min` : `${fmt(r * 3600, 3)}/h`; }
 
-function curveCard(name, c, t0, prefs, rerender, height = 170) {
-  const wide = wideCurves.has(name);
-  const timeX = prefs.x === "time" && c.passes.some(p => p.some(q => q.t != null));
+// Along x a point goes by its step, its time since the run started, or the value at its step of a counter the run
+// logs (samples, epochs, decisions), read off that counter's line: runs that count steps differently then line up.
+function interpAt(pass, step) {  // pass: a counter's points, steps rising
+  if (!pass.length || step < pass[0].step || step > pass[pass.length - 1].step) return null;
+  let a = 0, b = pass.length - 1;
+  while (b - a > 1) { const mid = (a + b) >> 1; if (pass[mid].step <= step) a = mid; else b = mid; }
+  const p = pass[a], q = pass[b];
+  if (q.step <= step) return q.v;
+  return q.step === p.step ? p.v : p.v + (q.v - p.v) * (step - p.step) / (q.step - p.step);
+}
+function xAxis(x, an, t0) {
+  if (x === "time") return { f: q => q.t == null ? null : q.t - t0, label: "time", fmt: v => dur(v), tip: v => `after ${dur(v)}` };
+  if (x.startsWith("m:")) {
+    const name = x.slice(2), c = an && an[name];
+    return { f: c && c.counter ? (q => interpAt(c.passes[0], q.step)) : (() => null), label: name, fmt: compact, tip: v => `${name} ${fmt(v)}` };
+  }
+  return { f: q => q.step, label: "step", fmt: compact, tip: v => `step ${fmt(v)}` };
+}
+function xChoice(prefs, counters, anyTimes) {  // the x picked, when these runs have it; else step
+  if (prefs.x === "time" && anyTimes) return "time";
+  return typeof prefs.x === "string" && prefs.x.startsWith("m:") && counters.includes(prefs.x.slice(2)) ? prefs.x : "step";
+}
+function xPicker(x, counters, anyTimes, rerender) {
+  const opts = [["step", "step"], ...(anyTimes ? [["time", "time since start"]] : []), ...counters.map(k => [`m:${k}`, k])];
+  return h("label", { class: "dim", style: "display:inline-flex;gap:6px;align-items:center", title: "What x is: the step, the time since each run started, or a counter the runs log (samples, epochs), which lines up runs that count steps differently" },
+    "x", h("select", { "aria-label": "X axis", onchange: e => { setCurvePrefs({ ...curvePrefs(), x: e.target.value }); rerender(); } },
+      opts.map(([v, t]) => h("option", { value: v, selected: v === x || null }, t))));
+}
+function lineAt(l, x) {  // l: [x, y] sorted by x; y at x, between two points on the line, null outside it
+  if (!l.length || x < l[0][0] || x > l[l.length - 1][0]) return null;
+  let a = 0, b = l.length - 1;
+  while (b - a > 1) { const mid = (a + b) >> 1; if (l[mid][0] <= x) a = mid; else b = mid; }
+  const p = l[a], q = l[b];
+  if (q[0] <= x) return q[1];
+  return q[0] === p[0] ? p[1] : p[1] + (q[1] - p[1]) * (x - p[0]) / (q[0] - p[0]);
+}
+function meanBand(lines, n = 240) {  // runs alike but for the seed: their mean wherever one has a value, and their range
+  const a = lo(lines.map(l => l[0][0])), b = hi(lines.map(l => l[l.length - 1][0])), steps = a === b ? 0 : n;
+  const mean = [], band = [];
+  for (let i = 0; i <= steps; i++) {
+    const x = steps ? a + (b - a) * i / steps : a, vals = [];
+    for (const l of lines) { const v = lineAt(l, x); if (v != null) vals.push(v); }
+    if (!vals.length) continue;
+    mean.push([x, vals.reduce((t, v) => t + v, 0) / vals.length]);
+    band.push([x, lo(vals), hi(vals)]);
+  }
+  return { mean, band };
+}
+function seedKey(r) {  // runs alike but for the seed: the same kind, code, command and config, leaving out the seed
+  const c = flatten(r.config || {}), keys = Object.keys(c).filter(k => !/(^|[._-])seeds?$/i.test(k)).sort();
+  const cmd = (Array.isArray(r.command) ? r.command.join(" ") : r.command || "").replace(/--?seeds?(=|\s+)\S+/gi, "");
+  return keys.length || cmd ? JSON.stringify([r.kind || null, r.git_sha || null, cmd, keys.map(k => [k, c[k]])]) : `run ${r.run}`;
+}
+
+function curveCard(name, c, t0, prefs, rerender, height, an, x, run) {
+  const wide = wideCurves.has(name), ax = xAxis(x, an, t0);
   const logY = prefs.log && c.min > 0;
   const ty = v => logY ? Math.log10(v) : v, uy = v => logY ? 10 ** v : v;
   const series = [];
   c.passes.forEach((pass, i) => {
-    const pts = pass.filter(q => !timeX || q.t != null).map(q => [timeX ? q.t - t0 : q.step, ty(q.v)]);
+    const pts = pass.map(q => [ax.f(q), ty(q.v)]).filter(p => p[0] != null);
     if (!pts.length) return;
     const latest = i === c.passes.length - 1;
     const label = c.passes.length > 1 ? `${name} · pass ${i + 1}` : name;
@@ -624,23 +726,25 @@ function curveCard(name, c, t0, prefs, rerender, height = 170) {
       h("button", { class: "icon-btn", title: wide ? "Smaller" : "Full width", "aria-label": wide ? `Shrink ${name}` : `Widen ${name}`,
         onclick: () => { wide ? wideCurves.delete(name) : wideCurves.add(name); rerender(); } }, wide ? "⤡" : "⤢")),
     h("div", { class: "curve-sub", title: sub }, sub),
-    lineChart({ series, height: wide ? Math.max(300, height) : height, title: name, xLabel: timeX ? "time" : "step", xFmt: timeX ? (v => dur(v)) : compact,
-      yFmt: v => fmt(uy(v)), yTickFmt: v => compact(uy(v)), tipTitle: x => timeX ? `after ${dur(x)}` : `step ${fmt(x)}` }));
+    lineChart({ series, height: wide ? Math.max(300, height) : height, title: name, xLabel: ax.label, xFmt: ax.fmt,
+      yFmt: v => fmt(uy(v)), yTickFmt: v => compact(uy(v)), tipTitle: ax.tip, zoomKey: `run ${run} ${name} ${x}` }));
 }
 
 function curvesSection(r) {
   const pts = r.curve_points || {}, times = r.curve_times || {};
   const all = Object.fromEntries(Object.keys(pts).map(k => [k, analyzeCurve(pts[k], times[k])]));
-  const names = Object.keys(all).filter(k => !all[k].counter);
   const counters = Object.keys(all).filter(k => all[k].counter);
+  const names = [...Object.keys(all).filter(k => !all[k].counter), ...counters];  // counters (steps, samples) last
   if (!names.length) return { counters, all, node: null };
+  const anyTimes = Object.values(times).some(a => a.some(t => t != null));
   const ts = Object.values(times).flat().filter(t => t != null);
   const t0 = ts.length ? lo(ts) : 0;
   const box = h("div"), grid = h("div", { class: "curves" }), count = h("span", { class: "count", "aria-live": "polite" });
   const renderGrid = () => {
     const prefs = curvePrefs(), hits = names.filter(k => curveMatch(k, curveQuery)), shown = hits.slice(0, CURVE_MAX);
     const height = shown.length <= 2 ? 280 : shown.length <= 6 ? 220 : 180;  // taller when there is room
-    grid.replaceChildren(...shown.map(k => curveCard(k, all[k], t0, prefs, renderGrid, height)));
+    const x = xChoice(prefs, counters, anyTimes);
+    grid.replaceChildren(...shown.map(k => curveCard(k, all[k], t0, prefs, renderGrid, height, all, x, r.run)));
     if (!hits.length) grid.append(h("div", { class: "empty" }, `No chart name matches “${curveQuery}”.`));
     count.textContent = (hits.length === names.length ? `${names.length} charts` : `${hits.length} of ${names.length} charts`)
       + (shown.length < hits.length ? ` · first ${shown.length} drawn: filter to see the rest` : "");
@@ -655,7 +759,7 @@ function curvesSection(r) {
       onkeydown: e => { if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = curveQuery = ""; renderGrid(); } } });
     box.replaceChildren(
       h("h2", {}, "Training curves", h("span", { class: "h2sub" }, `${names.length} metric${names.length > 1 ? "s" : ""} from metrics.jsonl`)),
-      h("div", { class: "curves-bar" }, names.length > 1 ? search : null, seg("x", [["step", "Step"], ["time", "Time"]], "X axis"),
+      h("div", { class: "curves-bar" }, names.length > 1 ? search : null, xPicker(xChoice(prefs, counters, anyTimes), counters, anyTimes, render),
         seg("smooth", [[0, "Raw"], [0.6, "Smooth"], [0.9, "Smoother"]], "Smoothing"),
         seg("log", [[false, "Linear"], [true, "Log"]], "Y scale"), count),
       grid);
@@ -685,6 +789,27 @@ function runStats(r, counters, all) {
   return tiles.length > 1 || (p && p.total) || Object.keys(all).length ? h("div", { class: "card stats run-stats" }, tiles) : null;
 }
 
+// A running run's curves come as progress.sampled cut them: in aligned chunks, of which the full ones never change,
+// so each refresh asks only for the chunks from the first one not yet full and keeps the points before it.
+const liveRuns = new Map();  // "comp run" -> its data as last fetched, while it runs
+async function fetchRun(ref) {
+  const key = `${COMP} ${ref}`, old = liveRuns.get(key), was = old && old.curve_sample;
+  const r = await api(`run/${encodeURIComponent(ref)}` + (was ? `?chunk=${was.chunk}&since=${was.full}` : ""));
+  const now = r.curve_sample;
+  if (was && now && now.start > 0) {
+    const pts = {}, times = {}, done = {};
+    for (const k of new Set([...Object.keys(old.curve_points), ...Object.keys(r.curve_points)])) {
+      const keep = was.done[k] || 0;
+      pts[k] = [...(old.curve_points[k] || []).slice(0, keep), ...(r.curve_points[k] || [])];
+      times[k] = [...(old.curve_times[k] || []).slice(0, keep), ...(r.curve_times[k] || [])];
+      done[k] = keep + (now.done[k] || 0);
+    }
+    Object.assign(r, { curve_points: pts, curve_times: times, curve_sample: { ...now, done } });
+  }
+  liveRuns.delete(key);
+  if (r.status === "running") { liveRuns.set(key, r); if (liveRuns.size > 16) liveRuns.delete(liveRuns.keys().next().value); }
+  return r;
+}
 const seenRuns = new Map();  // "comp run" -> its data when last shown, drawn at once when it opens again
 async function showRun(ref) {
   const key = `${COMP} ${ref}`;
@@ -693,7 +818,7 @@ async function showRun(ref) {
     const seen = first && seenRuns.get(key);
     first = false;
     if (seen) refreshDrawer(drawerState);  // it is loading: it runs again with fresh data once this draw ends
-    const r = seen || await api(`run/${encodeURIComponent(ref)}`);
+    const r = seen || await fetchRun(ref);
     seenRuns.delete(key); seenRuns.set(key, r);
     if (seenRuns.size > 6) seenRuns.delete(seenRuns.keys().next().value);
     const host = r.remote && r.remote.host;
@@ -704,7 +829,7 @@ async function showRun(ref) {
       h("button", { class: "btn", style: "margin-left:auto;font-size:12.5px", title: "Its curves, scores and config next to other runs'", onclick: () => {
         if (!state.compare.includes(r.run)) setSelection(state.compare.length < CMP_MAX ? [...state.compare, r.run] : [...state.compare.slice(0, CMP_MAX - 1), r.run]);
         showCompare(); } }, others ? `Compare with ${others} selected` : "Compare…")), hyp];
-    out.push(h("div", { class: "dim", style: "margin:6px 0 12px" }, `${r.kind} · by ${r.author || "–"} · ${ago(r.created)} ago`, r.task ? ` · T${r.task}` : ""));
+    out.push(h("div", { class: "dim", style: "margin:6px 0 12px" }, `${r.kind} · by ${r.author || "–"} · ${ago(r.created)} ago`, r.task ? ` · ${r.task}` : ""));
     const cur = curvesSection(r);
     const stats = runStats(r, cur.counters, cur.all);
     if (stats) out.push(stats);
@@ -742,12 +867,13 @@ async function showRun(ref) {
 
 // -- comparing runs: their curves overlaid, scores (with kx's paired test against a baseline), what differs ------------
 const CMP_MAX = 8;  // one color each
-const cmp = { runs: new Map(), pairs: new Map(), list: null, listAt: 0, listing: null, protos: null, colors: new Map(), hidden: new Set(), query: "", scope: "shared", allConfig: false };
+const LIST_PAGE = 300;
+const cmp = { runs: new Map(), pairs: new Map(), list: null, listAt: 0, listing: null, protos: null, colors: new Map(), hidden: new Set(), query: "", scope: "shared", allConfig: false, n: LIST_PAGE, seeds: false };
 function loadSelection() {  // compareSaved: a selection was kept before (then an empty one stays empty)
   try { const v = localStorage.getItem(`kx-compare:${COMP}`); state.compareSaved = v != null; state.compare = JSON.parse(v || "[]").slice(0, CMP_MAX); } catch (e) { state.compare = []; }
 }
 function setSelection(v) { state.compare = [...new Set(v)].slice(0, CMP_MAX); try { localStorage.setItem(`kx-compare:${COMP}`, JSON.stringify(state.compare)); } catch (e) { } }
-function resetCompare() { cmp.runs.clear(); cmp.pairs.clear(); cmp.list = cmp.listing = null; cmp.listAt = 0; cmp.protos = null; cmp.colors.clear(); cmp.hidden.clear(); }
+function resetCompare() { cmp.runs.clear(); cmp.pairs.clear(); cmp.list = cmp.listing = null; cmp.listAt = 0; cmp.protos = null; cmp.colors.clear(); cmp.hidden.clear(); cmp.n = LIST_PAGE; }
 function runRef(v) { v = v.trim(); return /^r?\d+$/i.test(v) ? rid(parseInt(v.replace(/^r/i, ""), 10)) : v; }
 let paintSel = () => { };  // the Runs tab's selection bar, when it is shown
 function syncPicks() { document.querySelectorAll("input.pickbox").forEach(b => { b.checked = state.compare.includes(b.dataset.run); }); paintSel(); }
@@ -767,7 +893,7 @@ function cmpColor(run) {  // a run keeps its color while it stays in the compari
 }
 async function cmpRun(ref) {
   if (cmp.runs.has(ref)) return cmp.runs.get(ref);
-  const r = await api(`run/${encodeURIComponent(ref)}`);
+  const r = await fetchRun(ref);
   if (r.status !== "running") cmp.runs.set(ref, r);  // a finished run does not change
   return r;
 }
@@ -782,7 +908,7 @@ async function cmpVerdicts(base, r) {  // kx compare: is r better than the basel
 function cmpList() {  // recent runs with the curves each logs, for suggestions: what is at hand, fetched behind the charts
   if (!cmp.listing && (!cmp.list || Date.now() - cmp.listAt > (cmp.list.some(r => r.status === "running") ? 15000 : 60000))) {
     const comp = COMP, again = !!cmp.list;  // a refresh of a list already shown redraws the tab
-    const p = cmp.listing = api("runs?n=300&curves=1").then(l => { if (COMP === comp) { cmp.list = l; if (again && TAB === "training") load(); } })
+    const p = cmp.listing = api(`runs?n=${cmp.n}&curves=1&config=1`).then(l => { if (COMP === comp) { cmp.list = l; if (again && TAB === "training") load(); } })
       .catch(() => { }).finally(() => { if (cmp.listing === p) { cmp.listing = null; cmp.listAt = Date.now(); } });
   }
   return cmp.list || [];
@@ -811,23 +937,30 @@ function deltaText(v, base) {
 function cmpChanged() { syncPicks(); load(); }
 function showCompare() { closeDrawer(); TAB === "training" ? load() : setTab("training"); }  // the Training tab shows the selection
 
-function compareCard(name, entries, total, prefs, rerender, height) {
+function compareCard(name, entries, total, prefs, rerender, height, x) {
   const wide = wideCurves.has(name);
-  const timeX = prefs.x === "time" && entries.some(e => e.c.passes.some(p => p.some(q => q.t != null)));
   const logY = prefs.log && entries.every(e => e.c.min > 0);
   const ty = v => logY ? Math.log10(v) : v, uy = v => logY ? 10 ** v : v;
+  const smooth = pts => { if (!(prefs.smooth > 0 && pts.length > 3)) return pts; const sm = ema(pts.map(p => p[1]), prefs.smooth); return pts.map((p, j) => [p[0], sm[j]]); };
+  const lines = entries.map(e => {
+    const ax = xAxis(x, e.an, e.t0), pass = e.c.passes[e.c.passes.length - 1];  // a sweep logged again and again: its latest pass
+    return { e, pts: pass.map(q => [ax.f(q), ty(q.v)]).filter(p => p[0] != null).sort((a, b) => a[0] - b[0]) };
+  }).filter(l => l.pts.length);
+  const groups = new Map();  // with seeds pooled: the runs alike but for their seed, else each run alone
+  for (const l of lines) { const g = cmp.seeds ? l.e.seed : l.e.run; groups.set(g, [...(groups.get(g) || []), l]); }
   const series = [];
-  for (const e of entries) {
-    const pass = e.c.passes[e.c.passes.length - 1];  // a sweep logged again and again: its latest pass
-    const pts = pass.filter(q => !timeX || q.t != null).map(q => [timeX ? q.t - e.t0 : q.step, ty(q.v)]);
-    if (!pts.length) continue;
-    if (prefs.smooth > 0 && pts.length > 3) {
-      series.push({ name: e.run + " (raw)", points: pts, color: e.color, aside: true, thin: true });
-      const sm = ema(pts.map(p => p[1]), prefs.smooth);
-      series.push({ name: e.run, points: pts.map((p, j) => [p[0], sm[j]]), color: e.color });
-    } else series.push({ name: e.run, points: pts, color: e.color });
+  for (const ls of groups.values()) {
+    const { e, pts } = ls[0];
+    if (ls.length > 1) {
+      const { mean, band } = meanBand(ls.map(l => smooth(l.pts))), label = `${e.run} +${ls.length - 1}`;
+      series.push({ name: `${label} range`, kind: "band", points: band, color: e.color }, { name: `${label} (mean of ${ls.length})`, points: mean, color: e.color });
+    } else {
+      if (prefs.smooth > 0 && pts.length > 3) series.push({ name: e.run + " (raw)", points: pts, color: e.color, aside: true, thin: true });
+      series.push({ name: e.run, points: smooth(pts), color: e.color });
+    }
   }
-  const sub = [entries.length < total ? `in ${entries.length} of ${total} runs` : null,
+  const ax = xAxis(x, null, 0), lacking = entries.length - lines.length;
+  const sub = [entries.length < total ? `in ${entries.length} of ${total} runs` : null, lacking ? `${lacking} without ${ax.label}` : null,
     entries.some(e => e.c.passes.length > 1) ? "latest pass of each (steps restart)" : null].filter(Boolean).join(" · ");
   return h("div", { class: "card" + (wide ? " wide" : "") },
     h("div", { class: "curve-head" }, h("span", { class: "name", title: name }, name),
@@ -836,23 +969,28 @@ function compareCard(name, entries, total, prefs, rerender, height) {
     h("div", { class: "cmp-vals" }, entries.map(e => h("span", { title: `${e.run}: last ${fmt(e.c.last)} · min ${fmt(e.c.min)} · max ${fmt(e.c.max)}` },
       h("i", { class: "dot", style: `--c:${e.color}` }), h("b", {}, fmt(e.c.last))))),
     sub ? h("div", { class: "curve-sub", title: sub }, sub) : null,
-    lineChart({ series, height: wide ? Math.max(320, height) : height, title: name, xLabel: timeX ? "time" : "step", xFmt: timeX ? (v => dur(v)) : compact, legend: false, nearest: true,
-      yFmt: v => fmt(uy(v)), yTickFmt: v => compact(uy(v)), tipTitle: x => timeX ? `after ${dur(x)}` : `step ${fmt(x)}` }));
+    lineChart({ series, height: wide ? Math.max(320, height) : height, title: name, xLabel: ax.label, xFmt: ax.fmt, legend: false, nearest: true,
+      yFmt: v => fmt(uy(v)), yTickFmt: v => compact(uy(v)), tipTitle: ax.tip, zoomKey: `cmp ${name} ${x}` }));
 }
 
 function compareCharts(vis, an, total) {
   const have = {};  // curve name -> the shown runs that log it
   for (const r of vis) for (const k of Object.keys(an.get(r.run))) (have[k] = have[k] || []).push(r);
-  const names = Object.keys(have).filter(k => !have[k].every(r => an.get(r.run)[k].counter)).sort((a, b) => have[b].length - have[a].length);
+  const isCounter = k => have[k].every(r => an.get(r.run)[k].counter);
+  const names = Object.keys(have).sort((a, b) => have[b].length - have[a].length || isCounter(a) - isCounter(b));  // counters (steps, samples) last
   if (!names.length) return null;
+  const counters = names.filter(k => have[k].some(r => an.get(r.run)[k].counter));
+  const anyTimes = vis.some(r => Object.values(r.curve_times || {}).some(a => a.some(t => t != null)));
+  const seeds = new Map(vis.map(r => [r.run, seedKey(r)])), pooled = new Set(seeds.values()).size < vis.length;
   const shared = names.filter(k => have[k].length >= 2);
   const t0 = Object.fromEntries(vis.map(r => { const ts = Object.values(r.curve_times || {}).flat().filter(t => t != null); return [r.run, ts.length ? lo(ts) : 0]; }));
   const box = h("div"), grid = h("div", { class: "curves" }), count = h("span", { class: "count", "aria-live": "polite" });
   const pool = () => cmp.scope === "shared" && shared.length ? shared : names;
   const renderGrid = () => {
     const prefs = curvePrefs(), all = pool(), hits = all.filter(k => curveMatch(k, cmp.query)), drawn = hits.slice(0, CURVE_MAX);
+    const x = xChoice(prefs, counters, anyTimes);
     const cards = ks => { const height = ks.length <= 2 ? 300 : ks.length <= 6 ? 240 : 200;
-      return ks.map(k => compareCard(k, have[k].map(r => ({ run: r.run, c: an.get(r.run)[k], color: cmpColor(r.run), t0: t0[r.run] })), vis.length, prefs, renderGrid, height)); };
+      return ks.map(k => compareCard(k, have[k].map(r => ({ run: r.run, c: an.get(r.run)[k], an: an.get(r.run), color: cmpColor(r.run), t0: t0[r.run], seed: seeds.get(r.run) })), vis.length, prefs, renderGrid, height, x)); };
     const groups = new Map();  // "train/loss" and "train_acc" in a section "train", collapsible
     const section = k => k.includes("/") ? k.slice(0, k.indexOf("/")) : ((k.match(/^(train|training|val|valid|validation|eval|test|dev)(?=[_.\-])/i) || [""])[0].toLowerCase());
     for (const k of drawn) { const g = section(k); groups.set(g, [...(groups.get(g) || []), k]); }
@@ -879,7 +1017,8 @@ function compareCharts(vis, an, total) {
       h("h2", {}, "Training curves", h("span", { class: "h2sub" }, `${shared.length} logged by 2+ runs · ${names.length} in all`)),
       h("div", { class: "curves-bar" }, search,
         shared.length && shared.length < names.length ? seg(() => cmp.scope, v => { cmp.scope = v; }, [["shared", "In 2+ runs", "curves at least two of these runs log"], ["all", "Any run"]], "Which curves") : null,
-        seg(...pref("x"), [["step", "Step"], ["time", "Time", "time since each run started"]], "X axis"),
+        xPicker(xChoice(prefs, counters, anyTimes), counters, anyTimes, render),
+        pooled ? seg(() => cmp.seeds, v => { cmp.seeds = v; }, [[false, "Each run"], [true, "Mean of repeats", "runs with the same kind, code and config but for the seed: one line, their mean, with their range shaded"]], "Repeats") : null,
         seg(...pref("smooth"), [[0, "Raw"], [0.6, "Smooth"], [0.9, "Smoother"]], "Smoothing"),
         seg(...pref("log"), [[false, "Linear"], [true, "Log"]], "Y scale"), count),
       grid);
@@ -916,7 +1055,7 @@ function compareSections(runs, verdicts, refId) {
 
   // config and how each run was made: what differs from the baseline is marked
   const attrs = [["git", r => r.git_sha ? r.git_sha.slice(0, 10) + (r.git_dirty ? " (dirty)" : "") : null], ["branch", r => r.git_branch], ["command", r => Array.isArray(r.command) ? r.command.join(" ") : r.command],
-    ["host", r => r.remote && r.remote.host], ["by", r => r.author], ["task", r => r.task ? `T${r.task}` : null], ["tags", r => (r.tags || []).join(", ") || null]];
+    ["host", r => r.remote && r.remote.host], ["by", r => r.author], ["task", r => r.task ? `${r.task}` : null], ["tags", r => (r.tags || []).join(", ") || null]];
   const flat = runs.map(r => flatten(r.config));
   const cfgKeys = [...new Set(flat.flatMap(Object.keys))].sort();
   const lines = [...attrs.map(([k, f]) => ({ k, dim: true, vals: runs.map(f) })), ...cfgKeys.map(k => ({ k, vals: flat.map(c => c[k]) }))];
@@ -949,6 +1088,11 @@ function runState(r) {
   if (r.status === "running" && p && p.percent != null) return badge(`${p.percent.toFixed(0)}%${p.eta_s ? ` · ${dur(p.eta_s)} left` : ""}`, "active");
   return badge(r.status, RUN_KIND[r.status]);
 }
+function seedsOf(r) {  // the listed runs alike but for their seed, not shown yet
+  if (!r.config || !cmp.list) return [];
+  const k = seedKey(r);
+  return cmp.list.filter(x => x.run !== r.run && !state.compare.includes(x.run) && x.config && seedKey(x) === k).map(x => x.run).slice(0, CMP_MAX - state.compare.length);
+}
 function wsRow(r, { on, i = 0, n = 0, sim, full }) {
   const stop = f => e => { e.stopPropagation(); f(); };
   const toggle = () => { setSelection(on ? state.compare.filter(x => x !== r.run) : [...state.compare, r.run]); cmpChanged(); };
@@ -957,15 +1101,17 @@ function wsRow(r, { on, i = 0, n = 0, sim, full }) {
     ? h("button", { class: "swatch", style: `--c:${cmpColor(r.run)}`, "aria-pressed": off ? "false" : "true", title: off ? "Show on the charts" : "Hide from the charts (it stays here)",
         "aria-label": `${off ? "Show" : "Hide"} ${r.run} on the charts`, onclick: stop(() => { off ? cmp.hidden.delete(r.run) : cmp.hidden.add(r.run); load(); }) })
     : h("button", { class: "ws-add", title: full ? `${CMP_MAX} runs shown, the most at once` : "Show on the charts", "aria-label": `Show ${r.run} on the charts`, disabled: full || null, onclick: stop(toggle) }, "+");
-  return h("div", { class: "ws-run" + (on ? " on" : "") + (full && !on ? " full" : ""), role: "listitem", "data-text": `${r.run} ${r.hypothesis || ""} ${r.task ? "T" + r.task : ""} ${r.host || ""} ${r.status} ${(r.curves || []).join(" ")}`.toLowerCase(),
+  return h("div", { class: "ws-run" + (on ? " on" : "") + (full && !on ? " full" : ""), role: "listitem", "data-text": `${r.run} ${r.hypothesis || ""} ${r.task ? r.task : ""} ${r.host || ""} ${r.status} ${(r.curves || []).join(" ")}`.toLowerCase(),
       onclick: on || full ? null : toggle }, lead,
     h("div", { class: "ws-body" },
       h("div", { class: "ws-top" }, h("button", { class: "ws-id", title: "Open the run", onclick: stop(() => showRun(r.run)) }, r.run), runState(r),
         on && !i && n > 1 ? h("span", { class: "chip", title: "the others' scores and config are compared with it" }, "baseline") : null,
         r.score ? h("span", { class: "ws-score", title: "score under the reference protocol" }, fmt(r.score.value)) : null),
-      h("div", { class: "ws-meta" }, [`${ago(r.created)} ago`, t != null ? `${r.status === "running" ? "running for" : "ran"} ${dur(t)}` : null, r.host ? `@${r.host}` : null, r.task ? `T${r.task}` : null, sim].filter(Boolean).join(" · ")),
+      h("div", { class: "ws-meta" }, [`${ago(r.created)} ago`, t != null ? `${r.status === "running" ? "running for" : "ran"} ${dur(t)}` : null, r.host ? `@${r.host}` : null, r.task ? `${r.task}` : null, sim].filter(Boolean).join(" · ")),
       r.hypothesis ? h("div", { class: "ws-hyp", title: r.hypothesis }, r.hypothesis) : null),
-    on ? h("div", { class: "ws-acts" }, i ? h("button", { class: "ws-mk", title: "Compare the others' scores and config with this run", onclick: stop(() => { setSelection([r.run, ...state.compare.filter(x => x !== r.run)]); cmpChanged(); }) }, "make baseline") : null,
+    on ? h("div", { class: "ws-acts" }, seedsOf(r).length && !full ? h("button", { class: "ws-mk", title: "Show the runs with the same kind, code and config as this one (the seed aside): its repeats",
+        onclick: stop(() => { setSelection([...state.compare, ...seedsOf(r)]); cmpChanged(); }) }, `+${seedsOf(r).length} repeats`) : null,
+      i ? h("button", { class: "ws-mk", title: "Compare the others' scores and config with this run", onclick: stop(() => { setSelection([r.run, ...state.compare.filter(x => x !== r.run)]); cmpChanged(); }) }, "make baseline") : null,
       h("button", { class: "icon-btn mini", title: "Remove from the charts", "aria-label": `Remove ${r.run}`, onclick: stop(toggle) }, "✕")) : null);
 }
 
@@ -1023,7 +1169,7 @@ async function renderTraining() {
       : h("div", { class: "empty", style: "padding:10px 12px" }, "None yet: click a run below."),
     h("div", { class: "ws-group" }, "Runs", restCount),
     listBox,
-    h("div", { class: "ws-foot dim" }, `The ${list.length} newest runs.`, addBox));
+    h("div", { class: "ws-foot dim" }, `The ${list.length} newest runs.`, list.length >= cmp.n ? h("button", { class: "btn", style: "font-size:12px", onclick: () => { cmp.n += LIST_PAGE; cmp.list = null; load(); } }, `${LIST_PAGE} older`) : null, addBox));
   filter();
   const body = runs.length ? compareSections(runs, verdicts, refId)
     : [h("div", { class: "card" }, h("div", { class: "empty" }, list.length ? "Pick runs on the left to see their curves here." : "No runs yet."))];
@@ -1034,24 +1180,24 @@ async function renderTraining() {
 async function showTask(id) {
   openDrawer(async () => {
     const t = await api(`task/${encodeURIComponent(id)}`);
-    const out = [h("h3", {}, `T${t.id} ${t.title}`), h("div", { style: "margin:6px 0 12px" }, badge(t.status + (t.result ? ` · ${t.result}` : ""), TASK_KIND[t.status]), h("span", { class: "dim" }, `  p${t.priority}${t.owner ? " · " + t.owner : ""}`))];
-    out.push(kv([["waiting on", t.waiting_on], ["depends on", (t.depends || []).map(d => "T" + d).join(", ") || null], ["branch", t.branch], ["worktree", t.worktree ? h("span", { class: "cmd" }, t.worktree) : null]]));
+    const out = [h("h3", {}, `${t.id} ${t.title}`), h("div", { style: "margin:6px 0 12px" }, badge(t.status + (t.result ? ` · ${t.result}` : ""), TASK_KIND[t.status]), h("span", { class: "dim" }, `  p${t.priority}${t.owner ? " · " + t.owner : ""}`))];
+    out.push(kv([["waiting on", t.waiting_on], ["depends on", (t.depends || []).join(", ") || null], ["branch", t.branch], ["worktree", t.worktree ? h("span", { class: "cmd" }, t.worktree) : null]]));
     if (t.body) out.push(h("h2", {}, "Description"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.body));
     if (t.outcome) out.push(h("h2", {}, "Outcome"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.outcome));
     if (t.notes && t.notes.length) out.push(h("h2", {}, "Progress notes"), t.notes.map(n => h("div", { class: "note" }, h("div", { class: "when" }, `${ago(n.ts)} ago · ${n.author || ""}`), h("div", { class: "wrap" }, n.text))));
     if (t.runs && t.runs.length) out.push(h("h2", {}, "Runs"), table([["run"], ["status"], ["hypothesis"]], t.runs.map(r => [h("span", { class: "id" }, rid(r.id)), badge(r.status, RUN_KIND[r.status]), h("span", { class: "wrap" }, r.hypothesis || "")]), i => showRun(rid(t.runs[i].id))));
-    if (t.findings && t.findings.length) out.push(h("h2", {}, "Findings"), t.findings.map(f => h("div", { class: "note wrap" }, h("strong", {}, `F${f.id} `), h("span", { class: "chip" }, f.status), " ", f.text)));
+    if (t.findings && t.findings.length) out.push(h("h2", {}, "Findings"), t.findings.map(f => h("div", { class: "note wrap" }, h("strong", {}, `${f.id} `), h("span", { class: "chip" }, f.status), " ", f.text)));
     return out;
   }, `task=${id}`);
 }
 
 async function showSub(s) {
   openDrawer(async () => {
-    const out = [h("h3", {}, `S${s.id} `, badge(s.status, SUB_KIND[s.status])), h("div", { class: "dim", style: "margin:6px 0 12px" }, `${s.run_id ? rid(s.run_id) : "external"} · ${ago(s.created)} ago · by ${s.actor || "–"}`)];
+    const out = [h("h3", {}, `${s.id} `, badge(s.status, SUB_KIND[s.status])), h("div", { class: "dim", style: "margin:6px 0 12px" }, `${s.run_id ? rid(s.run_id) : "external"} · ${ago(s.created)} ago · by ${s.actor || "–"}`)];
     out.push(kv([["public", fmt(s.public)], ["private", s.private != null ? fmt(s.private) : null], ["message", s.message], ["why", s.why], ["expect", s.expect], ["error", s.error], ["target", s.target ? h("span", { class: "cmd" }, s.target) : null],
       ["on Kaggle", [ext(L().submissions, "submissions page"), kernelUrl(s.target) ? [" · ", ext(kernelUrl(s.target), "kernel")] : null]]]));
     if (s.games) {
-      const r = await api(`sub/S${s.id}`).catch(() => null);
+      const r = await api(`sub/${s.id}`).catch(() => null);
       const e = r && r.games ? { ...r.games, history: r.history } : null;
       if (e) {
         out.push(h("h2", {}, "Games"), kv([["played", e.games], ["record", `${e.win} won · ${e.loss} lost · ${e.tie} tied`], ["win rate", e.winrate != null ? `${(e.winrate * 100).toFixed(1)}% ±${(e.se * 100).toFixed(1)}` : null]]));
@@ -1116,14 +1262,14 @@ async function renderStatus() {
   const left = [], right = [];
   if (hist.points.length || hist.protocols.length) {
     left.push(h("h2", {}, "Score over time", h("span", { class: "h2sub" }, hist.protocol || "")));
-    const pts = hist.points.map(p => ({ x: parseInt(p.run.slice(1), 10), ...p }));
+    const pts = hist.points.map(p => ({ x: p.n ?? parseInt(p.run.slice(1), 10), ...p }));
     const byX = Object.fromEntries(pts.map(p => [p.x, p]));
     const sel = hist.protocols.length > 1 ? h("div", { class: "filters", style: "margin:0 0 6px" }, h("select", { "aria-label": "Score protocol", onchange: e => { state.histProtocol = e.target.value; load(); } },
       hist.protocols.map(p => h("option", { value: p.id, selected: p.id === hist.protocol || null }, `${p.id}${p.id === ref.id ? " (reference)" : ""} · ${p.n} run${p.n === 1 ? "" : "s"}`)))) : null;
     left.push(h("div", { class: "card" }, sel, pts.length ? lineChart({
       series: [{ name: "best so far", kind: "step", color: "var(--series-1)", points: pts.map(p => [p.x, p.best]), endLabel: p => `best ${fmt(p[1])}` },
                { name: "each run", kind: "dots", color: "var(--context)", points: pts.map(p => [p.x, p.value]) }],
-      xFmt: v => rid(Math.round(v)), xLabel: "run", height: 170, title: "score over time",
+      xFmt: v => rid(Math.round(v)), xTicks: intTicks, xLabel: "run", height: 170, title: "score over time",
       tipTitle: x => { const p = byX[x]; return p ? `${p.run} · ${p.hypothesis || ""}`.slice(0, 140) : rid(x); } }) : h("div", { class: "empty" }, "No scored runs under this protocol.")));
     left.push(...metricsOverTime(pts, byX));
   }
@@ -1134,7 +1280,7 @@ async function renderStatus() {
       runs.length ? table([["run"], ["progress"], ["elapsed", "num"], ["hypothesis"]], runs.map(r => [h("span", { class: "id" }, r.run, r.host ? h("span", { class: "dim" }, ` @${r.host}`) : ""),
         r.percent != null ? h("div", {}, h("div", { class: "progress" }, h("div", { style: `width:${r.percent}%` })), h("div", { class: "dim" }, `${r.percent.toFixed(0)}%${r.eta_s ? " · eta " + dur(r.eta_s) : ""}`)) : badge("running", "active"),
         dur(r.elapsed_s), h("span", { class: "clamp" }, r.hypothesis || "")]), i => showRun(runs[i].run)) : null,
-      workers.length ? table([["worker"], ["task"], ["tokens", "num"], ["doing"]], workers.map(w => [badge(w.agent, "active"), h("span", { class: "id" }, `T${w.task}`), compact((w.tokens_in || 0) + (w.tokens_out || 0)), h("span", { class: "dim clamp" }, w.last_action || "")])) : null));
+      workers.length ? table([["worker"], ["task"], ["tokens", "num"], ["doing"]], workers.map(w => [badge(w.agent, "active"), h("span", { class: "id" }, `${w.task}`), compact((w.tokens_in || 0) + (w.tokens_out || 0)), h("span", { class: "dim clamp" }, w.last_action || "")])) : null));
   }
   left.push(h("h2", {}, "Latest submissions", h("span", { class: "h2sub" }, ext(L().submissions, "on Kaggle", "Your submissions on Kaggle"))));
   left.push(h("div", { class: "card flush" }, sub.recent.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "num"], [""]],
@@ -1146,7 +1292,7 @@ async function renderStatus() {
   right.push(h("div", { class: "card flush" }, tl.length ?
     table([["task"], ["title", "one"], ["state"]], tl.map(t => {
       const note = t.status === "waiting" ? `waits on ${t.waiting_on}` : (t.last_note ? t.last_note.text : "");
-      return [h("span", { class: "id" }, `T${t.id}`),
+      return [h("span", { class: "id" }, `${t.id}`),
         h("span", { title: note ? `${t.title}\n${note}` : t.title }, h("span", { style: "font-weight:500" }, t.title), note ? h("span", { class: "dim" }, ` · ${note}`) : null),
         badge(t.status === "open" ? "ready" : t.status, TASK_KIND[t.status])];
     }),
@@ -1179,7 +1325,7 @@ function metricsOverTime(pts, byX) {
   if (picked.length) {
     const series = picked.map((k, i) => ({ name: k, kind: "line", color: `var(--series-${(i % 6) + 1})`,
       points: pts.filter(p => p.metrics && p.metrics[k] != null).map(p => [p.x, p.metrics[k]]), endLabel: p => `${k} ${fmt(p[1], 3)}` }));
-    card.append(lineChart({ series, xFmt: v => rid(Math.round(v)), xLabel: "run", height: 190, title: "reported metrics over runs",
+    card.append(lineChart({ series, xFmt: v => rid(Math.round(v)), xTicks: intTicks, xLabel: "run", height: 190, title: "reported metrics over runs",
       tipTitle: x => { const p = byX[x]; return p ? `${p.run} · ${p.hypothesis || ""}`.slice(0, 140) : rid(x); } }));
   }
   const ordered = [...picked, ...names.filter(k => !picked.includes(k))];
@@ -1228,7 +1374,7 @@ function leaderboardCharts(d) {
     series: [{ name: "our best", kind: "step", color: "var(--series-1)", points: bestPts, endLabel: p => `best ${fmt(p[1], 3)}` },
              { name: "our submissions", kind: "dots", color: "var(--context)", points: subs.map(x => [day(x.created), x.public]) }, ...medalSeries],
     refs, xFmt: dayFmt, xTicks: dayTicks, xLabel: "date", height: 210, title: "public leaderboard score over time",
-    tipTitle: x => { const sb = byDay[x]; return sb ? `S${sb.id}${sb.run ? " · " + sb.run : ""} · ${dayFmt(x)}${sb.message ? " · " + sb.message.slice(0, 80) : ""}` : dayFmt(x); } })));
+    tipTitle: x => { const sb = byDay[x]; return sb ? `${sb.id}${sb.run ? " · " + sb.run : ""} · ${dayFmt(x)}${sb.message ? " · " + sb.message.slice(0, 80) : ""}` : dayFmt(x); } })));
   if (!asLines) out.push(h("div", { class: "dim", style: "font-size:12px;margin:4px 0 6px" }, "Medal lines are today's values; each sync records them, so they become lines over time."));
   else if (x0 < firstSync) out.push(h("div", { class: "dim", style: "font-size:12px;margin:4px 0 6px" }, banded
     ? `Medal lines are recorded at each sync since ${dayFmt(firstSync)}. Before that, each lay in its shaded range, worked out from teams that have not submitted since; the dotted edge is the ${maxi ? "lowest" : "highest"} it can have been. Each sync narrows the ranges.`
@@ -1264,6 +1410,74 @@ function leaderboardCharts(d) {
   return out;
 }
 
+// -- runs side by side in the manner of mlflow: their config and reported metrics as columns, sorted by any of them,
+// and any two plotted against each other
+function colValue(r, key) {
+  if (key === "n") return r.n;
+  if (key === "score") return r.score ? r.score.value : null;
+  if (key === "seed") return r.seed;
+  const v = key.startsWith("c:") ? (r.flat || {})[key.slice(2)] : key.startsWith("m:") ? (r.metrics || {})[key.slice(2)] : undefined;
+  return v === undefined ? null : v;
+}
+function keyLabel(k) { return k === "n" ? "run" : k.startsWith("c:") ? k.slice(2) : k.startsWith("m:") ? `${k.slice(2)} (metric)` : k; }
+function runKeys(rows) {  // config keys and metrics: how many runs have each, whether it varies, whether it is a number
+  const out = new Map();
+  for (const r of rows) for (const [k, v] of [...Object.entries(r.flat || {}).map(([k, v]) => [`c:${k}`, v]), ...Object.entries(r.metrics || {}).map(([k, v]) => [`m:${k}`, v])]) {
+    const e = out.get(k) || { n: 0, values: new Set(), numeric: 0 };
+    e.n++; if (e.values.size < 3) e.values.add(JSON.stringify(v)); if (typeof v === "number") e.numeric++;
+    out.set(k, e);
+  }
+  if (rows.some(r => r.seed != null)) out.set("seed", { n: rows.filter(r => r.seed != null).length, values: new Set(rows.map(r => r.seed)), numeric: rows.filter(r => r.seed != null).length });
+  return [...out].map(([k, e]) => ({ k, n: e.n, varies: e.values.size > 1, numeric: e.numeric >= 2 })).sort((a, b) => b.varies - a.varies || b.n - a.n || a.k.localeCompare(b.k));
+}
+function pickedCols(keys) {  // as picked before, else the four config keys that vary in the most runs
+  try { const v = localStorage.getItem(`kx-cols:${COMP}`); if (v != null) return JSON.parse(v).filter(k => keys.some(x => x.k === k)); } catch (e) { }
+  return keys.filter(x => x.varies && x.k.startsWith("c:")).slice(0, 4).map(x => x.k);
+}
+function setPickedCols(v) { try { localStorage.setItem(`kx-cols:${COMP}`, JSON.stringify(v)); } catch (e) { } }
+function sortRuns(rows, key, dir) {
+  const val = r => key === "took" ? (r.finished ? new Date(r.finished) - new Date(r.created) : null) : key === "score" ? (r.score ? r.score.value : r.other_score ? r.other_score.value : null) : key in r && !key.includes(":") ? r[key] : colValue(r, key);
+  const vs = new Map(rows.map(r => [r, val(r)]));
+  rows.sort((a, b) => {
+    const x = vs.get(a), y = vs.get(b);
+    if (x == null || y == null) return (x == null) - (y == null);  // missing last either way
+    return dir * (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y)));
+  });
+}
+function colPicker(keys, picked) {
+  const box = h("div");
+  const list = keys.map(x => h("label", { "data-k": x.k.toLowerCase(), title: `${x.n} runs${x.varies ? "" : " · the same in all"}` },
+    h("input", { type: "checkbox", checked: picked.includes(x.k) || null, onchange: e => { setPickedCols(e.target.checked ? [...picked, x.k] : picked.filter(k => k !== x.k)); load(); } }),
+    keyLabel(x.k), x.varies ? null : h("span", { class: "dim" }, " · same")));
+  const q = h("input", { type: "search", placeholder: `filter ${keys.length} keys`, style: "min-width:0;width:100%;margin-bottom:6px", "data-keep": "cols-q",
+    oninput: e => { const w = e.target.value.toLowerCase(); list.forEach(l => { l.hidden = w && !l.dataset.k.includes(w); }); } });
+  box.append(q, ...(list.length ? list : [h("div", { class: "empty" }, "These runs record no config or metrics.")]));
+  const d = h("details", { class: "colpick", open: state.colsOpen || null }, h("summary", { class: "btn" }, `Columns${picked.length ? ` · ${picked.length}` : ""}`), box);
+  d.addEventListener("toggle", () => { state.colsOpen = d.open; });
+  return d;
+}
+function runsScatter(rows, keys, picked) {  // any two numbers of the runs against each other: a setting against the score
+  const nums = [["n", "run"], ...(rows.some(r => r.score) ? [["score", "score (reference)"]] : []), ...keys.filter(x => x.numeric).map(x => [x.k, keyLabel(x.k)])];
+  if (nums.length < 2) return null;
+  const sc = state.scatter, has = k => nums.some(([v]) => v === k);
+  const x = has(sc.x) ? sc.x : (picked.find(k => keys.some(e => e.k === k && e.numeric)) || "n");
+  const y = has(sc.y) ? sc.y : rows.some(r => r.score) ? "score" : (nums.find(([k]) => k !== x && k.startsWith("m:")) || nums.find(([k]) => k !== x))[0];  // a result over a setting
+  const logx = sc.logx && rows.every(r => { const v = colValue(r, x); return typeof v !== "number" || v > 0; });
+  const logy = sc.logy && rows.every(r => { const v = colValue(r, y); return typeof v !== "number" || v > 0; });
+  const tx = v => logx ? Math.log10(v) : v, ux = v => logx ? 10 ** v : v, tyv = v => logy ? Math.log10(v) : v, uy = v => logy ? 10 ** v : v;
+  const series = rows.map(r => [r, colValue(r, x), colValue(r, y)]).filter(([, a, b]) => typeof a === "number" && typeof b === "number")
+    .map(([r, a, b]) => ({ name: r.run, kind: "dots", color: state.compare.includes(r.run) ? "var(--series-2)" : "var(--series-1)", points: [[tx(a), tyv(b)]] }));
+  const pick = (val, set, label) => h("select", { "aria-label": label, onchange: e => { set(e.target.value); load(); } }, nums.map(([k, t]) => h("option", { value: k, selected: k === val || null }, t)));
+  const logBox = (on, set, label) => h("label", { class: "dim" }, h("input", { type: "checkbox", checked: on || null, onchange: e => { set(e.target.checked); load(); } }), ` log ${label}`);
+  return h("div", { class: "card" },
+    h("div", { class: "scatter-bar" }, h("strong", {}, "Plot"), pick(y, v => { sc.y = v; }, "Y"), h("span", { class: "dim" }, "against"), pick(x, v => { sc.x = v; }, "X"),
+      logBox(logx, v => { sc.logx = v; }, "x"), logBox(logy, v => { sc.logy = v; }, "y"),
+      h("span", { class: "dim" }, `${series.length} of ${rows.length} runs have both${state.compare.length ? " · selected runs in the second color" : ""}`)),
+    series.length ? lineChart({ series, height: 230, legend: false, xLabel: keyLabel(x), xFmt: v => fmt(ux(v)), yFmt: v => fmt(uy(v)), yTickFmt: v => compact(uy(v)), xPad: 0.5,
+      title: `${keyLabel(y)} against ${keyLabel(x)}`, tipTitle: v => `${keyLabel(x)} ${fmt(ux(v))}`, zoomKey: `runs ${x} ${y} ${logx} ${logy}` })
+      : h("div", { class: "empty" }, "No run has both numbers."));
+}
+
 async function renderRuns() {
   const protos = await api("protocols");
   const sel = h("select", { "aria-label": "Protocol", onchange: e => { state.runsProtocol = e.target.value; load(); } },
@@ -1287,11 +1501,12 @@ async function renderRuns() {
     rows = b.rows;
     box.append(h("div", { class: "dim", style: "padding:8px 10px 2px" }, h("span", { class: "id dim" }, b.protocol), " · “vs #1” is a paired test on the per-fold breakdown"));
     cells = rows.map(r => [pickBox(r.run), h("span", { class: "rank" }, r.rank), h("span", { class: "id" }, r.run), score(r.value, r.se), r.n ?? "", verdict(r.vs_best),
-      r.task ? h("span", { class: "id" }, `T${r.task}`) : "", h("span", { title: r.hypothesis || "" }, r.hypothesis || "")]);
+      r.task ? h("span", { class: "id" }, `${r.task}`) : "", h("span", { title: r.hypothesis || "" }, r.hypothesis || "")]);
     ids = rows.map(r => r.run);
     box.append(table([["", "sel"], ["#", "num"], ["run"], ["score", "num"], ["n", "num"], ["vs #1"], ["task"], ["hypothesis", "one"]], cells, i => showRun(ids[i])));
   } else {
-    rows = await api("runs?n=300&curves=1");
+    rows = await api(`runs?n=${state.runsN}&curves=1&config=1`);
+    for (const r of rows) r.flat = flatten(r.config || {});
     const took = r => r.status === "running" ? dur((Date.now() - new Date(r.created)) / 1000) : (r.finished ? dur((new Date(r.finished) - new Date(r.created)) / 1000) : "");
     const status = r => {
       const p = r.progress;
@@ -1299,20 +1514,30 @@ async function renderRuns() {
       return h("div", { class: "rprog", title: `${p.phase}${p.eta_s ? " · eta " + dur(p.eta_s) : ""}` }, badge(`${p.percent.toFixed(0)}%`, RUN_KIND[r.status]),
         h("div", { class: "progress" }, h("div", { style: `width:${p.percent}%` })), p.eta_s ? h("span", { class: "dim" }, dur(p.eta_s)) : null);
     };
-    const cols = [[["", "sel"], r => pickBox(r.run)], [["run"], r => h("span", { class: "id" }, r.run, r.host ? h("span", { class: "dim" }, ` @${r.host}`) : "")],
-      [["status"], status], [["started"], r => ago(r.created)], [["took", "num"], took], [["kind"], r => h("span", { class: "dim" }, r.kind)], [["by"], r => r.author || ""],
-      [["task"], r => r.task ? h("span", { class: "id" }, `T${r.task}`) : ""],
-      [["score", "num"], r => r.score ? score(r.score.value, r.score.se) : (r.other_score ? h("span", { class: "dim" }, `${fmt(r.other_score.value)} · ${r.other_score.protocol_id.split("@")[0]}`) : "")],
-      [["hypothesis", "one"], r => h("span", { title: r.hypothesis || "" }, r.hypothesis || "")]];
-    const used = cols.filter(([[name], f]) => !["task", "score", "kind", "by"].includes(name) || rows.some(r => { const v = f(r); return v !== "" && !(name === "kind" && r.kind === rows[0].kind) && !(name === "by" && r.author === rows[0].author); }));
+    const keys = runKeys(rows), picked = pickedCols(keys);
+    const base = [[["", "sel"], r => pickBox(r.run)], [["run"], r => h("span", { class: "id" }, r.run, r.host ? h("span", { class: "dim" }, ` @${r.host}`) : ""), "n"],
+      [["status"], status, "status"], [["started"], r => ago(r.created), "created"], [["took", "num"], took, "took"], [["kind"], r => h("span", { class: "dim" }, r.kind), "kind"], [["by"], r => r.author || "", "author"],
+      [["task"], r => r.task ? h("span", { class: "id" }, `${r.task}`) : "", "task"],
+      [["score", "num"], r => r.score ? score(r.score.value, r.score.se) : (r.other_score ? h("span", { class: "dim" }, `${fmt(r.other_score.value)} · ${r.other_score.protocol_id.split("@")[0]}`) : ""), "score"]];
+    const extra = picked.map(k => [[keyLabel(k), "num"], r => cellText(colValue(r, k)), k]);
+    const used = [...base.filter(([[name], f]) => !["task", "score", "kind", "by"].includes(name) || rows.some(r => { const v = f(r); return v !== "" && !(name === "kind" && r.kind === rows[0].kind) && !(name === "by" && r.author === rows[0].author); })),
+      ...extra, [["hypothesis", "one"], r => h("span", { title: r.hypothesis || "" }, r.hypothesis || ""), "hypothesis"]];
+    const srt = state.runsSort;
+    sortRuns(rows, srt.key, srt.dir);
     cells = rows.map(r => used.map(([, f]) => f(r)));
     ids = rows.map(r => r.run);
-    box.append(table(used.map(([c]) => c), cells, i => showRun(ids[i])));
+    const head = used.map(([[label, cls], , key]) => [key ? h("button", { class: "sort", title: `Sort by ${label}`, "data-dir": srt.key === key ? (srt.dir < 0 ? "↓" : "↑") : null,
+      onclick: () => { state.runsSort = { key, dir: srt.key === key ? -srt.dir : -1 }; load(); } }, label) : label, cls]);
+    out[0].append(colPicker(keys, picked));
+    const plot = runsScatter(rows, keys, picked);
+    if (plot) out.push(plot);
+    box.append(table(head, cells, i => showRun(ids[i])));
+    if (rows.length >= state.runsN) box.append(h("div", { style: "padding:8px 10px" }, h("button", { class: "btn", onclick: () => { state.runsN += LIST_PAGE; load(); } }, `${LIST_PAGE} older runs`)));
   }
   function filterRows() {
     const needle = state.runsQuery.toLowerCase();
     box.querySelectorAll("tbody tr").forEach((tr, i) => {
-      const r = rows[i]; const text = `${r.run} ${r.hypothesis || ""} ${r.task ? "T" + r.task : ""} ${(r.curves || []).join(" ")}`.toLowerCase();
+      const r = rows[i]; const text = `${r.run} ${r.hypothesis || ""} ${r.task ? r.task : ""} ${(r.curves || []).join(" ")}`.toLowerCase();
       tr.style.display = !needle || text.includes(needle) ? "" : "none";
     });
   }
@@ -1334,7 +1559,7 @@ async function renderTasks() {
   else if (state.tasksMode === "graph") out.push(h("div", { class: "card" }, taskGraph(rows)),
     h("div", { class: "dim", style: "font-size:12px;margin-top:6px" }, "Each task sits right of the tasks it depends on; a dashed link is a dependency not done yet.",
       state.tasksAll ? "" : " Done and dropped tasks are hidden, with their links."));
-  else out.push(h("div", { class: "card flush" }, table([["task"], ["p", "num"], ["state"], ["owner"], ["title"], ["latest", "one"]], rows.map(t => [h("span", { class: "id" }, `T${t.id}`), h("span", { class: "dim" }, `p${t.priority}`),
+  else out.push(h("div", { class: "card flush" }, table([["task"], ["p", "num"], ["state"], ["owner"], ["title"], ["latest", "one"]], rows.map(t => [h("span", { class: "id" }, `${t.id}`), h("span", { class: "dim" }, `p${t.priority}`),
     taskBadge(t), t.owner || "", h("span", { class: "wrap task-ttl", style: "font-weight:500" }, t.title), h("span", { class: "dim" }, taskLatest(t))]),
     i => showTask(rows[i].id))));
   return out;
@@ -1405,7 +1630,7 @@ function taskGraph(rows) {
     const note = taskLatest(t);
     g.append(h("button", { class: `tg-node ${t.status}`, style: `left:${at[t.id].x}px;top:${at[t.id].y}px;width:${NW}px;height:${NH}px;--kc:${KIND_COLOR[taskKind(t)] || "var(--axis)"}`,
       title: note ? `${t.title}\n${note}` : t.title, onclick: () => showTask(t.id) },
-      h("span", { class: "t" }, t.title), h("span", { class: "m" }, h("span", { class: "id" }, `T${t.id}`), taskBadge(t), t.owner ? h("span", { class: "dim" }, t.owner) : null)));
+      h("span", { class: "t" }, t.title), h("span", { class: "m" }, h("span", { class: "id" }, `${t.id}`), taskBadge(t), t.owner ? h("span", { class: "dim" }, t.owner) : null)));
   }
   return h("div", { class: "tg-wrap" }, g);
 }
@@ -1417,7 +1642,7 @@ async function renderFindings() {
     h("select", { "aria-label": "Tag", onchange: e => { state.findTag = e.target.value; load(); } }, h("option", { value: "" }, "all tags"), [...new Set([...tags, state.findTag].filter(Boolean))].map(t => h("option", { value: t, selected: t === state.findTag || null }, t))))];
   const FKIND = { open: "active", confirmed: "good", withdrawn: "neutral", superseded: "neutral" };
   out.push(h("div", { class: "card", style: "padding:4px 18px" }, rows.length ? rows.map(f => h("div", { class: "finding" },
-    h("div", { class: "head" }, h("span", { class: "id", style: "font-weight:600" }, `F${f.id}`), badge(f.status, FKIND[f.status]), f.tags.map(t => h("span", { class: "chip" }, t)),
+    h("div", { class: "head" }, h("span", { class: "id", style: "font-weight:600" }, `${f.id}`), badge(f.status, FKIND[f.status]), f.tags.map(t => h("span", { class: "chip" }, t)),
       h("span", { class: "dim", style: "font-size:12px" }, `${ago(f.ts)} ago · ${f.author || ""}`)),
     h("div", { class: "wrap" }, f.text),
     f.evidence.length ? h("div", { style: "margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;align-items:center" }, h("span", { class: "dim", style: "font-size:12px;margin-right:2px" }, "evidence"), f.evidence.map(e => h("button", { class: "btn small", onclick: () => showRun(rid(e)) }, rid(e)))) : null)) : h("div", { class: "empty" }, "No findings.")));
@@ -1430,10 +1655,10 @@ async function renderSubs() {
   const sl = d.slots, lad = sl.ladder;
   out.push(h("div", { class: "grid tiles", style: "grid-template-columns:repeat(auto-fit,minmax(220px,1fr))" }, h("div", { class: "card tile" }, h("div", { class: "label" }, "Today"), h("div", { class: "value" }, sl.limit ? `${sl.used} / ${sl.limit}` : String(sl.used)), h("div", { class: "sub" }, `resets in ${dur(sl.reset_in_s)}`)),
     lad ? h("div", { class: "card tile" }, h("div", { class: "label" }, "Ladder"), h("div", { class: "value" }, `${lad.active} playing`),
-      h("div", { class: "sub" }, lad.out ? `a new one retires S${lad.out.id} (${lad.out.episodes || 0}/${lad.need} games)` : "room for a new one")) : null));
+      h("div", { class: "sub" }, lad.out ? `a new one retires ${lad.out.id} (${lad.out.episodes || 0}/${lad.need} games)` : "room for a new one")) : null));
   out.push(h("h2", {}, "Submissions", h("span", { class: "h2sub" }, ext(L().submissions, "your submissions on Kaggle"), L().leaderboard ? " · " : null, ext(L().leaderboard, "leaderboard"))));
   out.push(h("div", { class: "card flush" }, d.submissions.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "nowrap"], ["by"], ["games"], ["why / error", "one"]],
-    d.submissions.map(s => [h("span", { class: "id" }, `S${s.id}`), s.run_id ? h("span", { class: "id" }, rid(s.run_id)) : h("span", { class: "dim" }, "external"), badge(s.status, SUB_KIND[s.status]), fmt(s.public), `${ago(s.created)} ago`, s.actor || "",
+    d.submissions.map(s => [h("span", { class: "id" }, `${s.id}`), s.run_id ? h("span", { class: "id" }, rid(s.run_id)) : h("span", { class: "dim" }, "external"), badge(s.status, SUB_KIND[s.status]), fmt(s.public), `${ago(s.created)} ago`, s.actor || "",
       s.games && s.games.winrate != null ? `${s.games.win + s.games.loss + s.games.tie} · ${(s.games.winrate * 100).toFixed(1)}%` : (s.episodes ? `${s.episodes}` : ""),
       h("span", { class: "dim", title: s.error || s.why || s.message || "" }, s.error || s.why || s.message || "")]), i => showSub(d.submissions[i])) : h("div", { class: "empty" }, "No submissions yet.")));
   return out;
@@ -1506,8 +1731,8 @@ api("comps").then(cs => {
 setInterval(() => {
   if (!document.hidden) {
     if (drawer.classList.contains("open")) {
-      if (drawerState?.live && Date.now() - drawerState.updated > 15000) refreshDrawer();
-    } else if (Date.now() - lastLoad > (TAB === "training" && !ws.live ? 60000 : 15000)) load();  // nothing running: its charts stand still
+      if (drawerState?.live && Date.now() - drawerState.updated > 5000) refreshDrawer();  // a run's refresh brings only its new points
+    } else if (Date.now() - lastLoad > (TAB === "training" ? (ws.live ? 5000 : 60000) : 15000)) load();  // nothing running: its charts stand still
   }
   tickUpdated();
 }, 5000);

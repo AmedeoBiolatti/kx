@@ -125,20 +125,21 @@ def _terminate(pid: int):
         pass
 
 
-def _commit_leftovers(wt: Path, agent: str, task: int):
+def _commit_leftovers(wt: Path, agent: str, task: str):
     g = git.info(wt)
     if not g or not [c for c in g["changes"] if c[3:].rstrip("/") not in ("data", ".kx")]:
         return
     subprocess.run(["git", "add", "-A"], cwd=wt, capture_output=True)
-    subprocess.run(["git", "commit", "-q", "-m", f"kx: work left uncommitted by {agent} on T{task}"], cwd=wt, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", f"kx: work left uncommitted by {agent} on {task}"], cwd=wt, capture_output=True)
 
 
 def _wrap_task(store: Store, w: dict, why: str, last: str | None = None):
     """A task the worker left active goes back to open, with why and its last words, so it shows in kx status."""
     t = store.one("SELECT status, owner FROM tasks WHERE id=?", (w["task"],))
-    if t is None or t["status"] != "active" or t["owner"] != w["agent"]:
+    if t is None or t["status"] != "active" or not store.owns(t["owner"], w["agent"]):
         return
     text = f"worker {w['agent']} stopped: {why}." + (f" Last message: {last.strip()[:1500]}" if last else "")
-    store.x("INSERT INTO task_notes (task, ts, author, text) VALUES (?,?,?,?)", (w["task"], now(), "kx", text))
-    store.x("UPDATE tasks SET status='open', owner=NULL, updated=? WHERE id=?", (now(), w["task"]))
+    with store.transaction():
+        store.insert("task_notes", {"task": w["task"], "ts": now(), "author": "kx", "text": text})
+        store.update("tasks", {"status": "open", "owner": None, "updated": now()}, id=w["task"], owner=t["owner"])
 

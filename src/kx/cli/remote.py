@@ -8,7 +8,7 @@ import sys
 from kx.cli.common import Out, S
 from kx.ledger import config
 from kx.ledger.config import KxError
-from kx.ledger.store import age_s, rid
+from kx.ledger.store import age_s
 from kx.views.text import ago, dim, dur, table
 
 
@@ -28,7 +28,7 @@ def cmd_list(a):
         with S() as st:
             for r in execute.running(st):
                 inf = execute.info(st, r["id"])
-                runs.append({"run": rid(r["id"]), "host": inf["host"], "hypothesis": r["hypothesis"],
+                runs.append({"run": r["id"], "host": inf["host"], "hypothesis": r["hypothesis"],
                              "elapsed_s": age_s(r["created"]), "synced": inf.get("synced")})
     data = {"hosts": [{"name": h.name, "kind": h.kind, "ssh": h.ssh, "mailbox": h.mailbox, "local": h.local, "dir": h.dir, "gpus": h.gpus,
                        "usd_per_hour": h.usd_per_hour, "running": sum(x["host"] == h.name for x in runs)} for h in hs.values()],
@@ -151,7 +151,7 @@ def cmd_follow(a):
     with S() as st:
         run_id = st.resolve(a.run)
     code = execute.follow(run_id, echo=not a.json, from_start=False)
-    return Out({"run": rid(run_id), "exit": code}, None, code)
+    return Out({"run": run_id, "exit": code}, None, code)
 
 
 def cmd_kill(a):

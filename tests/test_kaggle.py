@@ -19,7 +19,7 @@ def test_submit_preview_yes_duplicate(comp, fake_kaggle, capsys):
     code, subs = run_kx("subs", capsys=capsys)
     assert subs["submissions"][0]["ref"] == "1001" and subs["submissions"][0]["public"] == 0.5
     code, one = run_kx("subs", "S1", capsys=capsys)
-    assert code == 0 and one["submission"] == "S1" and one["games"] is None
+    assert code == 0 and one["submission"].startswith("S1-") and one["games"] is None
 
 
 def test_kernel_push_waits_for_dataset_and_pins_its_run(comp, fake_kaggle, monkeypatch, capsys):

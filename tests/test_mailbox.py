@@ -55,7 +55,7 @@ def test_a_mailbox_run_is_recorded_like_any_remote_run(agent, mbox, comp, capsys
     code, show = run_kx("show", out["run"], capsys=capsys)
     assert show["status"] == "done" and show["host"] == "mb" and show["scores"][0]["value"] == 0.8
     assert any("trained on kaggle:" in n["text"] for n in show["notes"])
-    d = Store(config.load()).run_dir(int(out["run"][1:]))
+    d = Store(config.load()).run_dir(out["run"])
     assert (d / "submission.csv").read_text().startswith("id,y") and "done training" in (d / "stdout.log").read_text()
     assert json.loads((d / "remote.json").read_text())["kind"] == "mailbox"
     assert not list((Path(os.environ["FAKE_RCLONE_ROOT"]) / "fake/kx/_hosts/mb/jobs").iterdir())  # taken
@@ -117,7 +117,7 @@ def test_kx_sources_travel_through_the_mailbox_and_uv_builds_the_env(mbox, comp,
     finally:
         p.terminate()
         p.wait(10)
-    d = Store(config.load()).run_dir(int(out["run"][1:]))
+    d = Store(config.load()).run_dir(out["run"])
     assert code == 0 and out["exit"] == 0, (d / "stderr.log").read_text()[-2000:]
     assert (far_kx / ".kx-hash").exists() and list((mbox / "demo" / "venvs").glob("*/.kx-ready"))
 

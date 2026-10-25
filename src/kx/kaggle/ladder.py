@@ -32,22 +32,30 @@ def _ts(s: str | None) -> str | None:
     return s if s.endswith("Z") or "+" in s[10:] else s + "+00:00"
 
 
-def store_episodes(store: Store, submission_id: int, rows: list[dict], ref: str | None = None) -> int:
-    """Insert new games and update state/end of known ones. When the listing has the agents, the players, rewards and
-    our seat (the agent whose submission is `ref`) come with it: no replay needed."""
+def store_episodes(store: Store, submission_id: str, rows: list[dict], ref: str | None = None) -> int:
+    """Insert new games and update state/end of known ones (only what changed reaches the log). When the listing has
+    the agents, the players, rewards and our seat (the agent whose submission is `ref`) come with it: no replay
+    needed."""
     rows = [r for r in rows if r.get("id") is not None]
-    for r in rows:
-        agents = sorted(r.get("agents") or [], key=lambda a: a.get("index", 0))
-        done = str(r.get("state", "")).upper().endswith("COMPLETED") and agents and all(a.get("reward") is not None for a in agents)
-        seat = next((i for i, a in enumerate(agents) if ref and str(a.get("submission_id")) == str(ref)), None)
-        store.x("INSERT INTO submission_episodes (submission_id, episode, created, ended, state, type, players, rewards, seat)"
-                " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(submission_id, episode) DO UPDATE SET ended=excluded.ended,"
-                " state=excluded.state, seat=COALESCE(excluded.seat, seat),"
-                " players=COALESCE(excluded.players, players), rewards=COALESCE(excluded.rewards, rewards)",
-                (submission_id, int(r["id"]), _ts(r.get("createTime")), _ts(r.get("endTime")),
-                 str(r.get("state", "")).split(".")[-1], str(r.get("type", "")).split(".")[-1].replace("EPISODE_TYPE_", ""),
-                 json.dumps([str(a.get("team_name")) for a in agents]) if agents else None,
-                 json.dumps([float(a["reward"]) for a in agents]) if done else None, seat))
+    known = {r["episode"] for r in store.all("SELECT episode FROM submission_episodes WHERE submission_id=?",
+                                             (submission_id,))}
+    with store.transaction():
+        for r in rows:
+            agents = sorted(r.get("agents") or [], key=lambda a: a.get("index", 0))
+            done = str(r.get("state", "")).upper().endswith("COMPLETED") and agents and all(a.get("reward") is not None for a in agents)
+            seat = next((i for i, a in enumerate(agents) if ref and str(a.get("submission_id")) == str(ref)), None)
+            ep = int(r["id"])
+            new = {"ended": _ts(r.get("endTime")), "state": str(r.get("state", "")).split(".")[-1],
+                   "seat": seat, "players": json.dumps([str(a.get("team_name")) for a in agents]) if agents else None,
+                   "rewards": json.dumps([float(a["reward"]) for a in agents]) if done else None}
+            if ep not in known:
+                store.insert("submission_episodes", {"submission_id": submission_id, "episode": ep,
+                                                     "created": _ts(r.get("createTime")),
+                                                     "type": str(r.get("type", "")).split(".")[-1].replace("EPISODE_TYPE_", ""),
+                                                     **new}, on="ignore")
+            else:  # what a listing leaves out (seat, players, rewards) stays as known
+                store.update("submission_episodes", {k: v for k, v in new.items() if v is not None or k in ("ended", "state")},
+                             submission_id=submission_id, episode=ep)
     return len(rows)
 
 
@@ -77,7 +85,7 @@ def outcome(players: list[str] | None, rewards: list[float] | None, us: str | No
     return "win" if rewards[i] > best else "loss" if rewards[i] < best else "tie"
 
 
-def summary(store: Store, submission_id: int, us: str | None) -> dict | None:
+def summary(store: Store, submission_id: str, us: str | None) -> dict | None:
     rows = store.x("SELECT * FROM submission_episodes WHERE submission_id=? AND type != 'VALIDATION' ORDER BY created",
                    (submission_id,)).fetchall()
     if not rows:
@@ -111,16 +119,15 @@ def summary(store: Store, submission_id: int, us: str | None) -> dict | None:
     return out
 
 
-def record_score(store: Store, submission_id: int, public: float | None, episodes: int | None):
+def record_score(store: Store, submission_id: str, public: float | None, episodes: int | None):
     """One row per change of (score, games): the rating's trajectory."""
     last = store.x("SELECT public, episodes FROM submission_scores WHERE submission_id=? ORDER BY ts DESC, rowid DESC LIMIT 1",
                    (submission_id,)).fetchone()
     if public is None or (last and last["public"] == public and last["episodes"] == episodes):
         return
-    store.x("INSERT INTO submission_scores (submission_id, ts, public, episodes) VALUES (?,?,?,?)",
-            (submission_id, now(), public, episodes))
+    store.insert("submission_scores", {"submission_id": submission_id, "ts": now(), "public": public, "episodes": episodes})
 
 
-def history(store: Store, submission_id: int) -> list[dict]:
+def history(store: Store, submission_id: str) -> list[dict]:
     return [dict(r) for r in store.x("SELECT ts, public, episodes FROM submission_scores WHERE submission_id=? ORDER BY ts, rowid",
                                      (submission_id,))]

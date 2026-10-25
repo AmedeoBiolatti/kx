@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from kx.board import findings, tasks
 from kx.guard import budgets
 from kx.kaggle import competition, ladder, submit
-from kx.ledger.store import Store, age_s, loads, parse_ts, rid
+from kx.ledger.store import Store, age_s, loads, parse_ts
 from kx.runs.protocol import ranking, reference
 from kx.views.text import ago, bold, dim, dur, num, score, table, trunc, width
 
@@ -30,7 +30,7 @@ def _run_line(store: Store, r) -> dict:
     from kx.runs.progress import snapshot
     snap = snapshot(store, r)
     p = snap["progress"]
-    return {"run": rid(r["id"]), "task": r["task"], "author": r["author"], "hypothesis": r["hypothesis"],
+    return {"run": r["id"], "task": r["task"], "author": r["author"], "hypothesis": r["hypothesis"],
             "elapsed_s": age_s(r["created"]), "heartbeat_age_s": age_s(r["heartbeat"]),
             "percent": p.get("percent"), "eta_s": p.get("eta_s"), "phase": p.get("phase") if p.get("total") else None,
             "host": remote_host(store, r)}
@@ -44,41 +44,52 @@ def remote_host(store: Store, r) -> str | None:
 def needs_you(store: Store) -> list[dict]:
     out = []
     for r, why in store.stale_runs():
-        out.append({"kind": "dead_run", "ref": rid(r["id"]), "age_s": age_s(r["created"]),
-                    "what": f"{rid(r['id'])} is marked running but {why}", "fix": "kx reap"})
+        out.append({"kind": "dead_run", "ref": r["id"], "age_s": age_s(r["created"]),
+                    "what": f"{r['id']} is marked running but {why}", "fix": "kx reap"})
     from kx.remote import execute as remote
     for r, inf, a in remote.stale(store):
-        out.append({"kind": "remote_run", "ref": rid(r["id"]), "age_s": age_s(r["created"]),
-                    "what": f"{rid(r['id'])} runs on {inf['host']}; not copied back for {dur(a)} (nothing is recorded until then)",
-                    "fix": f"kx remote sync  (or kx remote follow {rid(r['id'])})"})
+        out.append({"kind": "remote_run", "ref": r["id"], "age_s": age_s(r["created"]),
+                    "what": f"{r['id']} runs on {inf['host']}; not copied back for {dur(a)} (nothing is recorded until then)",
+                    "fix": f"kx remote sync  (or kx remote follow {r['id']})"})
     for s in store.all("SELECT * FROM submissions WHERE status IN ('inflight','unknown')"):
-        out.append({"kind": "uncertain_submission", "ref": f"S{s['id']}", "age_s": age_s(s["created"]),
-                    "what": f"S{s['id']} was sent but kx does not know whether Kaggle got it", "fix": "kx sync"})
+        out.append({"kind": "uncertain_submission", "ref": s['id'], "age_s": age_s(s["created"]),
+                    "what": f"{s['id']} was sent but kx does not know whether Kaggle got it", "fix": "kx sync"})
     for s in store.all("SELECT * FROM submissions WHERE status='error' AND created >= ?", (cutoff(days=3),)):
-        out.append({"kind": "failed_submission", "ref": f"S{s['id']}", "age_s": age_s(s["created"]),
-                    "what": f"S{s['id']} ({rid(s['run_id']) if s['run_id'] else 'external'}) failed on Kaggle: "
+        out.append({"kind": "failed_submission", "ref": s['id'], "age_s": age_s(s["created"]),
+                    "what": f"{s['id']} ({s['run_id'] if s['run_id'] else 'external'}) failed on Kaggle: "
                             f"{s['error'] or 'no reason given'}", "fix": "kx subs"})
     for t in tasks.listing(store):
         if t["status"] == "waiting" and (why := tasks.waiting_resolved(store, t)):
-            out.append({"kind": "resume_task", "ref": f"T{t['id']}", "age_s": age_s(t["updated"]),
-                        "what": f"T{t['id']} waited for {t['waiting_on']}: {why}, it can go on",
-                        "fix": f"kx task start T{t['id']}  (or kx spawn T{t['id']} ...)"})
+            out.append({"kind": "resume_task", "ref": t['id'], "age_s": age_s(t["updated"]),
+                        "what": f"{t['id']} waited for {t['waiting_on']}: {why}, it can go on",
+                        "fix": f"kx task start {t['id']}  (or kx spawn {t['id']} ...)"})
         elif t["status"] == "waiting" and ((on := t["waiting_on"] or "").startswith("kx ")
                                            or any(w in on.lower() for w in ("human", "you", "manual"))):
-            out.append({"kind": "task_waits_on_you", "ref": f"T{t['id']}", "age_s": age_s(t["updated"]),
-                        "what": f"T{t['id']} waits on you: {on}",  # a worker's `kx submit ... --yes`: run it yourself
-                        "fix": on if on.startswith("kx ") else f"kx task show T{t['id']}"})
+            out.append({"kind": "task_waits_on_you", "ref": t['id'], "age_s": age_s(t["updated"]),
+                        "what": f"{t['id']} waits on you: {on}",  # a worker's `kx submit ... --yes`: run it yourself
+                        "fix": on if on.startswith("kx ") else f"kx task show {t['id']}"})
     for w in store.all("SELECT w.* FROM workers w LEFT JOIN tasks t ON t.id=w.task WHERE w.finished IS NOT NULL "
                        "AND w.finished >= ? AND COALESCE(w.stop, '') != 'asked' AND (w.code != 0 OR w.stop IS NOT NULL) "
                        "AND COALESCE(t.status, '') NOT IN ('done', 'dropped') "
                        "AND NOT EXISTS (SELECT 1 FROM workers w2 WHERE w2.task=w.task AND w2.started > w.started) "
                        "ORDER BY w.finished DESC LIMIT 5", (cutoff(days=1),)):
         out.append({"kind": "worker_failed", "ref": w["id"], "age_s": age_s(w["finished"]),
-                    "what": f"worker {w['agent']} on T{w['task']} ended " + (f"(stopped: {w['stop']})" if w["stop"] else f"with exit {w['code']}"),
+                    "what": f"worker {w['agent']} on {w['task']} ended " + (f"(stopped: {w['stop']})" if w["stop"] else f"with exit {w['code']}"),
                     "fix": f"kx workers --show {w['id']}"})
+    from kx.ledger.sync import LOST_KEEP_S
+    for x in store.setting("lost_claims") or []:
+        t = store.one("SELECT owner, status FROM tasks WHERE id=?", (x["task"],))
+        if t is None or t["owner"] == x["was"] or (age_s(x["at"]) or 0) > LOST_KEEP_S:
+            continue
+        w = store.one("SELECT id FROM workers WHERE task=? AND finished IS NULL ORDER BY started DESC LIMIT 1", (x["task"],))
+        out.append({"kind": "lost_claim", "ref": x["task"], "age_s": age_s(x["at"]),
+                    "what": (f"{x['task']} is {t['status']} by {x['now']}" if t["status"] in ("done", "dropped") else
+                             f"{x['task']} was claimed by {x['now'] or 'nobody (reopened)'} before {x['was']}")
+                            + " (kx sync): work on it here is not counted as the task's",
+                    "fix": f"kx stop {w['id']}" if w else f"kx task show {x['task']}"})
     for t in store.all("SELECT * FROM tasks WHERE status='done' AND worktree IS NOT NULL ORDER BY updated DESC LIMIT 5"):
-        out.append({"kind": "unmerged_task", "ref": f"T{t['id']}", "age_s": age_s(t["updated"]),
-                    "what": f"T{t['id']} is done; its branch {t['branch']} is not merged", "fix": f"kx task merge T{t['id']}"})
+        out.append({"kind": "unmerged_task", "ref": t['id'], "age_s": age_s(t["updated"]),
+                    "what": f"{t['id']} is done; its branch {t['branch']} is not merged", "fix": f"kx task merge {t['id']}"})
     synced = store.setting("synced")
     open_subs = store.one("SELECT COUNT(*) FROM submissions WHERE status IN ('submitted','pending','running')")[0]
     if open_subs and (synced is None or (age_s(synced) or 0) > NEEDS_SYNC_S):
@@ -103,16 +114,16 @@ def results(store: Store, top: int = 3, recent: int = 3) -> dict:
     out = {"reference": ref, "best": [], "recent": [], "side": 0}
     if ref["id"]:
         for r in ranking(store, ref["id"], top):
-            out["best"].append({"run": rid(r["id"]), "value": r["value"], "se": r["se"], "n": r["n"],
+            out["best"].append({"run": r["id"], "value": r["value"], "se": r["se"], "n": r["n"],
                                 "hypothesis": r["hypothesis"], "task": r["task"], "created": r["created"]})
     seen = set()
     for r in store.all("SELECT r.id, r.hypothesis, r.created, r.task, s.protocol_id, s.value, s.se FROM runs r "
                        "JOIN scores s ON s.run_id=r.id WHERE r.status='done' AND s.protocol_id NOT LIKE 'kaggle:%' "
-                       "ORDER BY r.id DESC, (s.protocol_id = ?) DESC LIMIT ?", (ref["id"] or "", recent * 3)):
+                       "ORDER BY r.n DESC, r.id DESC, (s.protocol_id = ?) DESC LIMIT ?", (ref["id"] or "", recent * 3)):
         if r["id"] in seen or len(seen) >= recent:
             continue
         seen.add(r["id"])
-        out["recent"].append({"run": rid(r["id"]), "protocol": r["protocol_id"], "value": r["value"], "se": r["se"],
+        out["recent"].append({"run": r["id"], "protocol": r["protocol_id"], "value": r["value"], "se": r["se"],
                               "hypothesis": r["hypothesis"], "reference": r["protocol_id"] == ref["id"]})
     if ref["name"]:
         out["side"] = store.one("SELECT COUNT(DISTINCT name) FROM protocols WHERE name != ? AND id NOT LIKE 'kaggle:%'",
@@ -123,8 +134,8 @@ def results(store: Store, top: int = 3, recent: int = 3) -> dict:
 def submissions_summary(store: Store, n: int = 3) -> dict:
     subs = []
     us = ladder.our_name(store) if store.comp.kind == "simulation" else None
-    for s in store.all("SELECT * FROM submissions ORDER BY created DESC, id DESC LIMIT ?", (n,)):
-        d = {"id": f"S{s['id']}", "run": rid(s["run_id"]) if s["run_id"] else None, "status": s["status"],
+    for s in store.all("SELECT * FROM submissions ORDER BY created DESC, n DESC LIMIT ?", (n,)):
+        d = {"id": s['id'], "run": s["run_id"] if s["run_id"] else None, "status": s["status"],
              "public": s["public"], "created": s["created"], "episodes": s["episodes"], "error": s["error"]}
         if store.comp.kind == "simulation":
             g = ladder.summary(store, s["id"], us)
@@ -137,7 +148,7 @@ def submissions_summary(store: Store, n: int = 3) -> dict:
 
 def status(store: Store) -> dict:
     comp = store.comp
-    running = [_run_line(store, r) for r in store.all("SELECT * FROM runs WHERE status='running' ORDER BY id")]
+    running = [_run_line(store, r) for r in store.all("SELECT * FROM runs WHERE status='running' ORDER BY n, id")]
     from kx.workers.spawn import live
     workers = live(store)
     board = tasks.listing(store)
@@ -185,10 +196,10 @@ def render_status(st: dict, short: bool = False) -> str:
     for r in runs:
         prog = (f"{r['percent']:.0f}%" if r["percent"] is not None else "") + (f" eta {dur(r['eta_s'])}" if r["eta_s"] else "")
         who = r["author"] + (f" @{r['host']}" if r.get("host") else "")
-        rows.append([r["run"], dur(r["elapsed_s"]), prog, f"T{r['task']}" if r["task"] else "", who, r["hypothesis"]])
+        rows.append([r["run"], dur(r["elapsed_s"]), prog, r['task'] if r["task"] else "", who, r["hypothesis"]])
     for w in workers:
         rows.append([w["id"][:8], dur(age_s(w["started"])), f"{(w['tokens_in'] or 0) + (w['tokens_out'] or 0):,} tok",
-                     f"T{w['task']}" if w["task"] else "", f"worker {w['agent']}", w["last_action"] or ""])
+                     w['task'] if w["task"] else "", f"worker {w['agent']}", w["last_action"] or ""])
     if rows:
         out.append(table(rows, indent=2))
     out.append("")
@@ -197,9 +208,9 @@ def render_status(st: dict, short: bool = False) -> str:
     trows = []
     for t in st["tasks"]["active"]:
         what = t["waiting_on"] if t["status"] == "waiting" else (t["last_note"]["text"] if t["last_note"] else "")
-        trows.append([f"T{t['id']}", t["status"], t["owner"] or "", trunc(t["title"], 50), what])
+        trows.append([t['id'], t["status"], t["owner"] or "", trunc(t["title"], 50), what])
     for t in st["tasks"]["ready"]:
-        trows.append([f"T{t['id']}", "ready", f"p{t['priority']}", trunc(t["title"], 50), ""])
+        trows.append([t['id'], "ready", f"p{t['priority']}", trunc(t["title"], 50), ""])
     if trows:
         out.append(table(trows, indent=2))
     out.append("")
@@ -208,7 +219,7 @@ def render_status(st: dict, short: bool = False) -> str:
     if ref["id"]:
         side = f" · {res['side']} side protocol(s)" if res["side"] else ""
         out.append(bold("RESULTS") + dim(f"  reference {ref['id']} ({ref['source']}){side}"))
-        rows = [[f"#{i + 1}", b["run"], score(b["value"], b["se"]), f"T{b['task']}" if b["task"] else "", b["hypothesis"]]
+        rows = [[f"#{i + 1}", b["run"], score(b["value"], b["se"]), b['task'] if b["task"] else "", b["hypothesis"]]
                 for i, b in enumerate(res["best"])]
         rows += [["new", x["run"], score(x["value"], x["se"]), "" if x["reference"] else x["protocol"], x["hypothesis"]]
                  for x in res["recent"] if x["run"] not in {b["run"] for b in res["best"]}]
@@ -272,7 +283,7 @@ def context(store: Store, actor, task_id: int | None = None) -> dict:
     how = None
     if ref["id"]:
         row = store.one("SELECT r.command FROM runs r JOIN scores s ON s.run_id=r.id WHERE s.protocol_id=? "
-                        "ORDER BY r.id DESC LIMIT 1", (ref["id"],))
+                        "ORDER BY r.n DESC, r.id DESC LIMIT 1", (ref["id"],))
         if row and row["command"]:
             try:
                 how = " ".join(json.loads(row["command"]))
@@ -290,9 +301,9 @@ def context(store: Store, actor, task_id: int | None = None) -> dict:
         "recent": st["results"]["recent"],
         "submissions": st["submissions"]["recent"],
         "slots": st["submissions"]["slots"],
-        "tasks": [{"id": f"T{x['id']}", "status": x["status"], "title": x["title"], "owner": x["owner"]}
+        "tasks": [{"id": x['id'], "status": x["status"], "title": x["title"], "owner": x["owner"]}
                   for x in tasks.listing(store)][:10],
-        "findings": [{"id": f"F{f['id']}", "status": f["status"], "tags": f["tags"], "text": f["text"]}
+        "findings": [{"id": f['id'], "status": f["status"], "tags": f["tags"], "text": f["text"]}
                      for f in findings.listing(store, limit=8)],
         "needs_you": st["needs_you"] if not actor.worker else [],
         "rules": RULES,
@@ -308,15 +319,15 @@ def render_context(cx: dict) -> str:
     out += [f"- {g}" for g in cx["scoring"]]
     t = cx["task"]
     if t:
-        out += ["", f"## Your task: T{t['id']} {t['title']} ({t['status']})"]
+        out += ["", f"## Your task: {t['id']} {t['title']} ({t['status']})"]
         if t.get("body"):
             out.append(trunc(t["body"], 1200))
         if t.get("blocked_by"):
             out.append(f"Depends on, not done yet: {', '.join(t['blocked_by'])}")
         for n in t.get("notes") or []:
             out.append(f"- {ago(n['ts'])} ago, {n['author']}: {trunc(n['text'], 200)}")
-        out.append(f"Progress: `kx task note T{t['id']} \"...\"`. Finish: `kx task done T{t['id']} --result "
-                   f"positive|negative|inconclusive --outcome \"what was learned\"`, or `kx task wait T{t['id']} --on WHAT`.")
+        out.append(f"Progress: `kx task note {t['id']} \"...\"`. Finish: `kx task done {t['id']} --result "
+                   f"positive|negative|inconclusive --outcome \"what was learned\"`, or `kx task wait {t['id']} --on WHAT`.")
     ref = cx["reference"]
     out += ["", "## Results"]
     if ref.get("id"):

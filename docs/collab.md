@@ -12,8 +12,8 @@ not), not against someone gaming it.
 2. **Workspaces never run project code.** Training, evaluation, smoke tests, notebooks and building the project's
    environment (`uv sync` runs packages' build scripts) happen on executors. On a workspace, kx and the agents work
    only inside the kx folders.
-3. **The ledger becomes a shared log in git.** Each person (on each machine) appends to their own file on a `kx/log`
-   branch of the code repo; every workspace rebuilds its SQLite from all the files. Nobody edits anyone's entries.
+3. **The ledger becomes a shared log.** Each person (on each machine) appends to their own file in a folder everyone
+   reaches with rclone; every machine rebuilds its SQLite from all the files. Nobody edits anyone's entries.
 4. **Shared, scarce things follow rules kept in the repo**, changed by review like code: the team's submission slots,
    the reference protocol, executors' budgets.
 
@@ -25,7 +25,7 @@ flowchart LR
     subgraph W2["Bob's workspace"]
         B["Bob + agents"]
     end
-    G[("GitHub repo<br/>main: code · kx/log: entries")]
+    G[("GitHub repo: code<br/>shared folder: log entries")]
     M[("Mailbox / storage<br/>jobs · artifacts · data")]
     E1["Executor: Alice's GPU box"]
     E2["Executor: cloud VM"]
@@ -67,18 +67,40 @@ protects the executor's owner from a teammate's bug, and keeps the mailbox login
 
 ## The shared log
 
-- Branch `kx/log` (orphan) of the code repo, one file per writer: `log/<person>@<machine>.jsonl` and
-  `log/exec-<name>.jsonl`. One writer per file, so merges never conflict.
-- An entry: `{"id", "at", "by": "alice/codex-1", "machine", "kind", "ref", "data"}`. Kinds are what the ledger
-  records today: run started / ended, score, note, tag, task added / claimed / done, finding, protocol, submission
-  proposed / OK'd / sent, budget use. A correction is a new entry that points at the old one.
-- kx appends locally at once and pushes with `kx sync` (and after each write when online). The SQLite ledger becomes
-  a cache: each workspace indexes the new lines of every file, so kx stays fast offline and the dashboard is unchanged.
-- **IDs carry their author**: `alice/r0012`, `alice/T3`; a bare `r0012` still means yours. No two people can mint
-  the same id, and nobody needs a counter server.
-- **A check on the branch** (a GitHub Action) rejects a push that edits or deletes past lines, or writes another
-  writer's file. That catches the accident (a bad rebase, a hand edit), not a determined person, as agreed.
-- Attribution comes from the GitHub account that pushes; entry signatures can come later if trust changes.
+*Built (phase 2), through a shared rclone folder rather than the `kx/log` git branch first planned: one mechanism
+for every machine, including the ones without a GitHub login (rented boxes, the mailbox hosts' Drive).*
+
+- One file per writer, `log/<user>@<machine>.jsonl`, in the store and in `<share>/<slug>/log/` (`share:` in
+  machine.yaml: Google Drive, S3, sftp, anything rclone reaches). One writer per file, so nothing is ever merged.
+- An entry is a change to a row of the ledger: `{"c", "at", "by", "u", "t", "op", "row" | "set" + "where"}`. `u` is
+  random: an entry that comes twice (a log kept beside its shared copy, history moved to a new name) applies once. `c` is a
+  logical clock (Lamport's): a change made after seeing another machine's entry replays after it whatever the wall
+  clocks say. The SQLite file is a cache, the logs replayed in (c, at, log) order, so every machine that has the same
+  logs has the same ledger. Logs that only grew are applied in place when their new entries replay after the cache's
+  last one; otherwise the cache is rebuilt.
+- **Logs only grow**: a sync never lets a shorter or different copy replace a log, here or in the shared folder. A
+  machine that lost its store takes its own log back from the folder; what it wrote meanwhile is kept beside it as
+  `<user>@<machine>+fork-<time>.jsonl`. Only complete lines go up, read under the lock, and a half line a crash left
+  is cut off before anything is appended to it. Two stores under one name are refused (each log has one writer); a
+  machine that changed its name keeps its old logs, and what it wrote under a name another machine also has moves to
+  its new one.
+- **IDs are a number and a name** (`r0012-fluent-sun`), not author-qualified: the number is the next one this machine
+  knows of, the name a random one, so two machines can make the same number, not (but rarely) the same id. A bare
+  `r12` means this machine's, and kx says when another machine has an r12 too. Two rows with the very same id: this
+  machine's keeps it here, the other shows with its writer's suffix (`~ab12`), and the sync says so. From then on the
+  logs name each by its full name (id and suffix), so a note one machine writes reaches the same run on all.
+- **Owners carry their machine** (`alice@laptop`, `codex-1@gpubox`); of two claims made without seeing each other
+  the earlier by the clock wins, a `done` / `wait` made under a claim that lost changes nothing, and the loser's
+  `kx status` says it lost. A task branch whose task is not in this ledger yet is no task here (not this machine's
+  task of that number).
+- A Kaggle submission two machines took as external before seeing each other is one: the other id leads to it.
+  A submission is charged when it is sent, under the lock, so two agents on one machine cannot both pass a cap.
+- **Budgets count what pays for them**: the team's submission slots, a person's Kaggle GPU quota, tokens and paid
+  hosts, a machine's own GPUs (`budgets.scope` overrides). Usage made elsewhere counts once it has synced.
+- Run records (logs, curves, tables, submitted files) go as one archive per run, `records/<writer>/<run>.tar.gz`,
+  sent when its files change.
+- Not built from the plan: a check that rejects edits of past lines (the folder trusts whoever can write it), claims
+  that expire after a day, attribution beyond the `user:` each machine gives itself.
 
 ## Executors
 
@@ -166,8 +188,9 @@ parts of files on demand, but it is slow for random reads, so it is an option, n
    executors in bwrap (data read-only but `derived/`, home hidden); hosts get Kaggle's files only, plus
    `kx exec --needs`; big outputs stay on the host until `kx fetch`. Until executors take jobs from a workspace
    (phase 3), the submission smoke test runs on the workspace, sandboxed.
-2. **The log.** `kx/log` branch, per-writer files, SQLite as a cache, author-qualified ids, `kx sync` for the log,
-   import of the current ledger as the first entries.
+2. **The log.** *Built 2026-10-24* (see The shared log: an rclone folder, not a git branch). Per-writer files,
+   SQLite as a cache, ids of a number and a name, owners and budgets per machine and person, `kx sync`, `kx import`
+   of the old ledger as the first entries, `kx export`.
 3. **Team executors.** Jobs from any member, code fetched from the repo, results recorded by the executor, per-person
    budgets.
 4. **Slots and proposals.** The sharing rule, proposals and OKs, Kaggle's count as the authority.
@@ -178,8 +201,8 @@ Lazy data spans phases: on-demand copy-back (`kx fetch`) and `--needs` came with
 
 ## Settled
 
-- Code and log in a private GitHub repo; a GitHub Action checks the `kx/log` branch.
-- Executors push their own log entries, with a token limited to `kx/log` (a GitHub ruleset). The alternative, results
+- Code in a private GitHub repo; the log in a shared rclone folder (phase 2 as built).
+- Executors write their own log entries (phase 3), to their own file in the shared folder. The alternative, results
   relayed by their owner's workspace, records nothing while that workspace is off.
 - Workspaces do not load models for now.
 

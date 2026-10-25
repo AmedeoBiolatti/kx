@@ -10,12 +10,13 @@ from conftest import commit, submittable, run_kx
 def test_a_worker_leaves_sending_to_its_person(comp, fake_kaggle, capsys, monkeypatch):
     r = submittable(comp)
     capsys.readouterr()
+    t = run_kx("task", "add", "send it", capsys=capsys)[1]
     monkeypatch.setenv("KX_AGENT", "w1")
-    monkeypatch.setenv("KX_TASK", "T3")
+    monkeypatch.setenv("KX_TASK", "T1")
     code, err = run_kx("submit", r.name, "-m", "from worker", "--yes", capsys=capsys)
     assert code == 3 and not fake_kaggle.sent
     assert err["command"] == f"kx submit {r.name} -m 'from worker' --yes" and err["preview"]["run"] == r.name
-    assert "kx task wait T3 --on" in err["fix"]
+    assert f"kx task wait {t['id']} --on" in err["fix"]
     monkeypatch.delenv("KX_AGENT")
     monkeypatch.delenv("KX_TASK")
     code, res = run_kx("submit", r.name, "-m", "from worker", "--yes", capsys=capsys)  # the person runs it

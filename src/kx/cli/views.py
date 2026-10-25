@@ -47,7 +47,7 @@ def _in_comp() -> bool:
 def cmd_context(a):
     from kx.views import status
     with S() as st:
-        t = tasks.parse_id(a.task) if a.task else task_here()
+        t = st.resolve(a.task, "tasks") if a.task else task_here(st)
         cx = status.context(st, actors.current(), t)
     return Out(cx, status.render_context(cx))
 

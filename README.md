@@ -1,8 +1,8 @@
 # kx
 
 The ledger and Kaggle interface of a competition: runs, scores, tasks, findings and submissions, shared by you, the
-agent you talk to in your terminal, and background workers. kx records, checks and talks to Kaggle; it never decides
-what to work on and never runs anything on its own.
+agent you talk to in your terminal, background workers, your other machines and the people you work with. kx
+records, checks and talks to Kaggle; it never decides what to work on and never runs anything on its own.
 
 ```bash
 kx status      # what is running, what needs you (with the command that fixes it), results, submissions, budgets
@@ -35,7 +35,7 @@ A competition repo then looks like this:
 ├── notebooks/
 ├── kernel/  or  agent/     what Kaggle runs (code competitions / simulations)
 ├── data -> .kx/store/data
-└── .kx/                    git-ignored: store/ (ledger, runs, artifacts, data) and worktrees/
+└── .kx/                    git-ignored: store/ (log/, its cache, runs, artifacts, data) and worktrees/
 ```
 
 Everything for a competition is in its folder: deleting it deletes everything. `store:` in comp.yaml puts the
@@ -63,12 +63,22 @@ Any other command: `kx exec -H "hypothesis" [--probe] [--gpus 1] -- ./train.sh` 
   (`kx protocol use NAME`); `board`, `status` and `context` rank under it.
 - Experiments need committed code; `--probe` runs on uncommitted code and saves the patch.
 - `kx runs` · `show R` · `board` · `compare A B` · `search WORDS` · `note` · `tag` · `path` · `fetch` · `reap`
+- Runs are `r0012-fluent-sun`: a number and a name, like wandb's (tasks `T7-quiet-otter`, findings `F3-…`,
+  submissions `S5-…`). `r12`, `12` or `fluent-sun` find it.
 - `kx task start T7` links the runs you start to T7 until it is done.
 - The dashboard's Training tab works like wandb: the runs that log curves on the left (state, when, how long, host,
   score; filter, or order by the curves they share), and the curves of up to 8 shown runs overlaid on the right,
   grouped by prefix (`train/`, `val_`), then their scores with `kx compare`'s verdict against a baseline, metrics, and
   what differs in config and code. `#training/compare=r12,r15` links to it; ticking runs in the Runs tab or
-  "Compare…" on a run opens it with them.
+  "Compare…" on a run opens it with them. x can be the step, the time since start, or a counter the runs log
+  (samples, epochs), which lines up runs that count steps differently; drag across a chart to zoom (double-click
+  goes back). "Mean of repeats" draws runs with the same code, command and config but for the seed as one line
+  with their range shaded ("+N repeats" on a run adds them).
+- Curves come from the whole of `metrics.jsonl`, cut for drawing to the first, last, lowest and highest point of
+  each stretch of the run and both sides of every restart (`kx show R --curves` gives the same); a running run's
+  chart fetches only what is new, every 5 seconds.
+- The Runs tab works like mlflow's: every run with columns of its config keys and reported metrics (pick them under
+  Columns), sorted by any column, and any two numbers plotted against each other (a setting against the score).
 
 ## Remote runs
 
@@ -139,6 +149,56 @@ and the same Google app: with `drive.file`, files written by another app, such a
 invisible to it. Give rclone your own Google app (rclone's documentation: "Making your own client_id"): its shared
 one is rate-limited, which turns a one-second call into a minute.
 
+## The ledger: machines and people
+
+The ledger is a set of logs, `.kx/store/log/<user>@<machine>.jsonl`: every change (a run started, a score, a note, a
+task claimed) is a line in the log of the machine where it happened, and only that machine writes to it. The SQLite
+file next to it is a cache of the logs, rebuilt when another machine's log arrives: deleting it loses nothing of the
+ledger (only this machine's list of workers and when it last synced). Changes replay in the order they were made as far
+as the machines knew (a logical clock), not by their clocks: a change made after seeing another machine's row comes
+after it.
+
+Machines and people share a project through a folder all of them reach with rclone (Google Drive, S3, a server):
+
+```yaml
+# ~/.config/kx/machine.yaml
+share: gdrive:kx        # <share>/<slug>/: everyone's logs and run records
+name: laptop            # this machine in the logs (default: its host name); user: defaults to your login
+```
+
+```bash
+git push && kx sync     # machine A: code to GitHub, history to the shared folder
+git clone ... && cd <competition> && kx init --no-data && kx data && kx sync     # machine B, the first time
+```
+
+`kx sync` puts this machine's logs and run records (logs, curves, tables, the files it submitted; one archive per
+run, sent when its files change) in the shared folder and takes everyone else's, then syncs with Kaggle (`--ledger`:
+only the first part). Logs only grow and each has one writer, so a sync never merges or overwrites anything: two
+machines working at the same time both keep their work. No copy of a log replaces a longer one, here or in the shared
+folder: a machine that lost its store (a new clone, `.kx/` deleted) gets its log and run records back at its next
+sync, and if it wrote before that, what it wrote is kept beside them (`<user>@<machine>+fork-<time>.jsonl`; what
+both copies have counts once). Their ids do not clash: two runs both numbered 12 have different names (`r12` then
+means this machine's, and kx says that another machine has one; write full ids where others read them). In the rare
+case two machines made the very same id, this machine's keeps it here and the other shows with a suffix
+(`r0012-fluent-sun~3f2a`, the sync says so); either form finds the same run on every machine. Run outputs stay where
+they were made: a remote run's on its host (`kx fetch`), a local run's on its machine.
+
+Each machine needs its own `name:`. Two stores writing under one name (two rented boxes both called `ubuntu`) are
+refused at the sync, until one gets another name; what it wrote under the old one moves to the new one. Renaming a
+machine is fine: the logs, tasks, runs and budgets under its old name stay its own.
+
+A task's owner is who claimed it and where: `me@laptop`, `codex-1@gpubox` (the same worker name from comp.yaml on two
+machines is two owners). Two claims of one task (`kx task start`, `kx spawn`) made without seeing each other: the
+earlier by the clock keeps it, and a `kx task done` or `wait` the other machine made under its claim changes nothing
+(a task one of them finished first stays done). The machine that lost the claim hears of it
+at its sync, and `kx status` lists it with the command that stops its worker.
+
+`kx export [FILE]` writes the whole history in one file (every log here, this machine's run records); `kx import
+FILE` takes one in, to move a project without a shared folder or to add a second project for the same competition.
+`kx import` alone brings in this store's ledger from kx before the logs (`ledger.sqlite`), once: every run, task,
+finding and submission keeps its number and gets a name (`r0012` becomes `r0012-<name>`), and the run folders are
+renamed to match. `kx import PATH` does the same for another store or repo, taking its runs' kx files.
+
 ## Tasks and findings
 
 ```bash
@@ -157,8 +217,9 @@ kx finding withdraw F3 · kx finding supersede F3 --by F7
 
 `kx submit R -m "..." --why "..." --expect "..."` builds an immutable artifact, smoke-tests it, checks slots,
 duplicates and (rl) the ladder, and shows a preview; `--yes` sends it. `kx kernel push R` and `kx dataset push R PATH`
-work the same way. `kx sync` fetches results and a leaderboard snapshot; `kx subs` lists submissions with today's
-slots (and the ladder, simulations); `kx subs S12` shows one with its games.
+work the same way. `kx sync` brings the other machines' history, then fetches results and a leaderboard snapshot
+(only what changed goes into the log); `kx subs` lists submissions with today's slots, counted from everyone's (and the
+ladder, simulations); `kx subs S12` shows one with its games.
 
 A dataset kx uploads carries `kx-dataset.json` (its run). `kx kernel push` refuses while an attached dataset kx uploaded
 is still processing on Kaggle (the kernel would get its previous version), and fills `"__KX_PUSH__"` in the kernel
@@ -209,6 +270,11 @@ budgets:
 Caps are checked before the action; over one, the action is refused with when it frees up (exit 4): wait, or raise
 the cap. `kx budget` shows usage.
 
+comp.yaml is shared by everyone, so each cap counts what its metric is paid from: submissions the team's (Kaggle's
+team slots), `kaggle_gpu_hours`, `tokens` and `cloud_usd` a person's (all their machines with the same `user:` in
+machine.yaml), `gpu_hours` this machine's GPUs. `budgets: {scope: {tokens: team}}` changes one. A worker's own cap
+(`budgets.workers`) counts that worker on this machine. Another machine's usage counts once it has synced.
+
 ## Develop
 
 ```bash
@@ -218,7 +284,8 @@ uv run pytest
 ```
 src/kx/
   __init__.py   the Python API competition code imports (kx.run, kx.Protocol, ...)
-  ledger/       comp.yaml (config) and the SQLite ledger (store)
+  ledger/       comp.yaml (config), the logs and their SQLite cache (store), ids (names), kx sync and export
+                (sync), old ledgers in (port)
   runs/         kx.run, kx exec, protocols, compare, progress and curves, run objects
   remote/       hosts (ssh, mailbox), run.sh, kx exec --on (ship, launch, copy back, record), the mailbox agent
   board/        tasks and findings
@@ -238,7 +305,8 @@ The older autopilot version is tag `v1`.
 ## Privacy
 
 kx keeps everything on your machines: the ledger, runs and data. It talks only to Kaggle (through the kaggle CLI),
-to hosts you configure, and, for mailbox hosts, to the storage you name. The Google Drive app it uses through
+to hosts you configure, and to the storage you name for mailbox hosts and for `share:` (the logs and run records of
+the projects you sync). The Google Drive app it uses through
 rclone is described in [PRIVACY.md](PRIVACY.md).
 
 MIT licensed ([LICENSE](LICENSE)).

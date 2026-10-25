@@ -97,11 +97,9 @@ def register(store: Store, proto: Protocol) -> str:
     prev = store.x(
         "SELECT * FROM protocols WHERE name=? ORDER BY created DESC LIMIT 1", (proto.name,)
     ).fetchone()
-    store.x(
-        "INSERT OR IGNORE INTO protocols (id, name, fingerprint, spec, direction, description, created, noise)"
-        " VALUES (?,?,?,?,?,?,?,?)",
-        (pid, proto.name, proto.fingerprint, dumps(proto.spec), direction, proto.description, now(), proto.noise),
-    )
+    store.insert("protocols", {"id": pid, "name": proto.name, "fingerprint": proto.fingerprint, "spec": dumps(proto.spec),
+                               "direction": direction, "description": proto.description, "created": now(),
+                               "noise": proto.noise}, on="ignore")
     if prev is not None:
         n = store.x("SELECT COUNT(*) FROM scores WHERE protocol_id=?", (prev["id"],)).fetchone()[0]
         diff = spec_diff(loads(prev["spec"]), proto.spec)
@@ -128,11 +126,10 @@ def register(store: Store, proto: Protocol) -> str:
 def ensure_kaggle_protocols(store: Store):
     mode = store.comp.scoring
     for pid, desc in ((KAGGLE_PUBLIC, mode.public), (KAGGLE_PRIVATE, mode.private)):
-        store.x(
-            "INSERT OR IGNORE INTO protocols (id, name, fingerprint, spec, direction, description, created)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (pid, pid, "kaggle", dumps({}), store.comp.direction, desc, now()),
-        )
+        if not store.one("SELECT 1 FROM protocols WHERE id=?", (pid,)):
+            store.insert("protocols", {"id": pid, "name": pid, "fingerprint": "kaggle", "spec": dumps({}),
+                                       "direction": store.comp.direction, "description": desc, "created": now()},
+                         on="ignore")
 
 
 def protocol_name(pid: str) -> str:
@@ -192,12 +189,12 @@ def ranking(store: Store, pid: str, limit: int | None = None, include_discarded:
     order = "DESC" if p["direction"] == "max" else "ASC"
     hide = "" if include_discarded else " AND r.id NOT IN (SELECT run_id FROM tags WHERE tag='discarded')"
     sql = (f"SELECT r.*, s.value, s.se, s.n, s.breakdown, s.protocol_id FROM scores s JOIN runs r ON r.id=s.run_id "
-           f"WHERE s.protocol_id=? AND r.status='done'{hide} ORDER BY s.value {order}, r.id")
+           f"WHERE s.protocol_id=? AND r.status='done'{hide} ORDER BY s.value {order}, r.n, r.id")
     rows = store.all(sql + (" LIMIT ?" if limit else ""), (pid, limit) if limit else (pid,))
     return rows
 
 
-def best_run(store: Store) -> int | None:
+def best_run(store: Store) -> str | None:
     ref = reference(store)
     if not ref["id"]:
         return None

@@ -10,6 +10,7 @@ import io
 import json
 import os
 import secrets
+import subprocess
 import sys
 import threading
 from contextlib import redirect_stderr
@@ -22,11 +23,13 @@ from kx.ledger.config import KxError
 
 TEMPLATE = Path(__file__).parent / "dashboard.html"
 LOCK = threading.Lock()
+SYNCING = threading.Lock()  # one kx sync at a time; it runs apart from LOCK, so the page keeps answering meanwhile
 
 ROUTES = {  # path -> kx argv builder from the query string
     "status": lambda q: ["status"],
     "runs": lambda q: ["runs", "-n", q.get("n", "200")] + (["--task", q["task"]] if q.get("task") else [])
-    + (["--tag", q["tag"]] if q.get("tag") else []) + (["--curves"] if q.get("curves") else []),
+    + (["--tag", q["tag"]] if q.get("tag") else []) + (["--curves"] if q.get("curves") else [])
+    + (["--config"] if q.get("config") else []),
     "compare": lambda q: ["compare", q["a"], q["b"]],
     "board": lambda q: ["board", "-n", q.get("n", "50")] + ([q["protocol"]] if q.get("protocol") else []),
     "protocols": lambda q: ["protocol", "list"],
@@ -56,12 +59,26 @@ def run_kx(argv: list[str]):
     return out.data
 
 
+def sync(root: Path) -> tuple[int, dict]:
+    """kx sync in its own process: it takes minutes (rclone, games), during which the page goes on reading."""
+    try:
+        p = subprocess.run([sys.executable, "-m", "kx", "sync", "--json"], cwd=root, capture_output=True, text=True,
+                           timeout=3600)
+    except subprocess.TimeoutExpired:
+        return 500, {"ok": False, "error": "kx sync took over an hour"}
+    try:
+        data = json.loads(p.stdout)
+    except ValueError:
+        return 500, {"ok": False, "error": (p.stderr or p.stdout).strip()[-600:] or f"kx sync exited {p.returncode}"}
+    return (200 if p.returncode == 0 else 400), data
+
+
 def history(root: Path, protocol: str | None = None) -> dict:
     """Scores under `protocol` (default: the reference) in run order (discarded runs left out, as on the board), with
     the best so far and each run's reported numeric metrics
     (r.log / logged_metrics.json), for the score-over-time and metrics-over-time charts. `protocols` lists every
     protocol with a scored run, for the picker."""
-    from kx.ledger.store import Store, loads, rid
+    from kx.ledger.store import Store, loads
     from kx.runs.progress import number
     from kx.runs.protocol import reference
     with Store(config.load(root)) as st:
@@ -74,14 +91,14 @@ def history(root: Path, protocol: str | None = None) -> dict:
         if not pid:
             return {"reference": ref, "protocol": None, "protocols": protos, "points": []}
         direction = st.protocol(pid)["direction"]
-        rows = st.all("SELECT r.id, r.created, r.hypothesis, r.metrics, s.value, s.se FROM scores s JOIN runs r ON r.id=s.run_id "
-                      f"WHERE s.protocol_id=? AND {live} ORDER BY r.id", (pid,))
+        rows = st.all("SELECT r.id, r.n, r.created, r.hypothesis, r.metrics, s.value, s.se FROM scores s JOIN runs r ON r.id=s.run_id "
+                      f"WHERE s.protocol_id=? AND {live} ORDER BY r.n, r.id", (pid,))
         best, pts = None, []
         for r in rows:
             if best is None or (r["value"] > best if direction == "max" else r["value"] < best):
                 best = r["value"]
             metrics = loads(r["metrics"]) or {}
-            pts.append({"run": rid(r["id"]), "created": r["created"], "value": r["value"], "se": r["se"], "best": best,
+            pts.append({"run": r["id"], "n": r["n"], "created": r["created"], "value": r["value"], "se": r["se"], "best": best,
                         "hypothesis": r["hypothesis"],
                         "metrics": {k: v for k, v in metrics.items() if number(v)} if isinstance(metrics, dict) else {}})
         return {"reference": ref, "protocol": pid, "protocols": protos, "direction": direction, "points": pts}
@@ -92,13 +109,13 @@ def leaderboard(root: Path, protocol: str | None = None) -> dict:
     lines) taken at each kx sync, the range each medal line can have had before the first (submit.lb_bounds), and local
     vs public score for every run with both, under `protocol` (default: the
     reference), with a least-squares line once there are two."""
-    from kx.ledger.store import Store, rid
+    from kx.ledger.store import Store
     from kx.runs.protocol import KAGGLE_PUBLIC, reference
     with Store(config.load(root)) as st:
         ref = reference(st)
         subs = [{"id": r["id"], "created": r["created"], "public": r["public"], "private": r["private"],
-                 "run": rid(r["run_id"]) if r["run_id"] else None, "message": r["message"]}
-                for r in st.all("SELECT * FROM submissions WHERE public IS NOT NULL ORDER BY created, id")]
+                 "run": r["run_id"] if r["run_id"] else None, "message": r["message"]}
+                for r in st.all("SELECT * FROM submissions WHERE public IS NOT NULL ORDER BY created, n")]
         snaps = [dict(r) for r in st.all("SELECT * FROM lb_snapshots ORDER BY ts")]
         bounds = st.setting("lb_bounds")
         protos = [{"id": r["id"], "n": r["n"]} for r in st.all(
@@ -106,11 +123,11 @@ def leaderboard(root: Path, protocol: str | None = None) -> dict:
             "WHERE s.protocol_id NOT LIKE 'kaggle:%' GROUP BY s.protocol_id ORDER BY (s.protocol_id=?) DESC, n DESC",
             (KAGGLE_PUBLIC, ref["id"] or ""))]
         pid = protocol or (ref["id"] if any(p["id"] == ref["id"] for p in protos) else protos[0]["id"] if protos else None)
-        pairs = [{"run": rid(r["id"]), "hypothesis": r["hypothesis"], "local": r["local"], "se": r["se"],
+        pairs = [{"run": r["id"], "hypothesis": r["hypothesis"], "local": r["local"], "se": r["se"],
                   "public": r["public"], "submissions": r["n"]}
                  for r in st.all("SELECT r.id, r.hypothesis, s.value local, s.se, k.value public, k.n FROM scores s "
                                  "JOIN scores k ON k.run_id=s.run_id AND k.protocol_id=? JOIN runs r ON r.id=s.run_id "
-                                 "WHERE s.protocol_id=? ORDER BY r.id", (KAGGLE_PUBLIC, pid))] if pid else []
+                                 "WHERE s.protocol_id=? ORDER BY r.n, r.id", (KAGGLE_PUBLIC, pid))] if pid else []
     fit = None
     if len(pairs) >= 2:
         xs, ys = [p["local"] for p in pairs], [p["public"] for p in pairs]
@@ -198,7 +215,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif parts[1] == "leaderboard":
                     data = leaderboard(root, q.get("protocol") or None)
                 elif parts[1] == "run" and len(parts) == 3:
-                    data = run_kx(["show", parts[2], "--curves"])
+                    data = run_kx(["show", parts[2], "--curves"]  # a live chart has the curves up to its last sample
+                                  + (["--chunk", q["chunk"], "--since", q.get("since", "0")] if q.get("chunk") else []))
                 elif parts[1] == "task" and len(parts) == 3:
                     data = run_kx(["task", "show", parts[2]])
                 elif parts[1] == "worker" and len(parts) == 3:
@@ -226,17 +244,18 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         parts = u.path.strip("/").split("/")
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if parts[:2] != ["api", "sync"]:
+            return self._json(404, {"ok": False, "error": "not found"})
         try:
             root = self._root(q)
-            with LOCK:
-                os.chdir(root)
-                if parts[:2] == ["api", "sync"]:  # read-only on Kaggle: submissions, scores, a leaderboard snapshot
-                    data = run_kx(["sync"])
-                else:
-                    return self._json(404, {"ok": False, "error": "not found"})
-            return self._json(200, data)
         except KxError as e:
             return self._json(400, {"ok": False, "error": str(e), "fix": e.fix})
+        if not SYNCING.acquire(blocking=False):
+            return self._json(409, {"ok": False, "error": "a kx sync is already running"})
+        try:  # read-only on Kaggle: submissions, scores, a leaderboard snapshot
+            return self._json(*sync(root))
+        finally:
+            SYNCING.release()
 
 
 def serve(port: int = 8765, open_browser: bool = False):

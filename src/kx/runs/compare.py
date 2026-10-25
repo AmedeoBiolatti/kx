@@ -7,7 +7,7 @@ import statistics
 from dataclasses import dataclass, field
 
 from kx.ledger.config import DEFAULT_Z
-from kx.ledger.store import Store, loads, rid
+from kx.ledger.store import Store, loads
 from kx.runs.protocol import spec_diff
 
 Z_THRESHOLD = DEFAULT_Z
@@ -172,7 +172,7 @@ def compare(store: Store, a: int, b: int, z_thr: float = Z_THRESHOLD) -> Result:
                 if sa[pa]["noise"] != sb[pb]["noise"]:
                     diff.append(f"noise: {sa[pa]['noise']} -> {sb[pb]['noise']}")
                 res.hints.append(
-                    f"{rid(a)} has {pa}, {rid(b)} has {pb}: same name, different spec ({'; '.join(diff)}). "
+                    f"{a} has {pa}, {b} has {pb}: same name, different spec ({'; '.join(diff)}). "
                     f"Re-score one of them under the other's protocol."
                 )
     return res

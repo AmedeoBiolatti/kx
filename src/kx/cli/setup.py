@@ -1,4 +1,4 @@
-"""Commands: init, meta, data, backup, doctor."""
+"""Commands: init, meta, data, export, import, doctor."""
 
 from __future__ import annotations
 
@@ -86,10 +86,29 @@ def cmd_data(a):
     return Out(got, f"{len(got)} file(s) downloaded" if got else "data is up to date")
 
 
-def cmd_backup(a):
+def cmd_export(a):
+    from datetime import datetime, timezone
+    from kx.ledger import sync
     with S() as st:
-        p = st.backup(a.to)
-    return Out({"path": str(p)}, f"backup: {p}")
+        dest = Path(a.path or f"{st.comp.slug}-{datetime.now(timezone.utc):%Y%m%d-%H%M}.kx.tar.gz").expanduser()
+        r = sync.export(st, dest)
+    return Out(r, f"exported {r['logs']} log(s) and {r['files']} run file(s) to {r['path']} ({r['mb']} MB)")
+
+
+def cmd_import(a):
+    import tarfile
+    from kx.ledger import port, sync
+    with S() as st:
+        src = Path(a.path).expanduser() if a.path else st.comp.store / "ledger.sqlite"
+        if src.is_file() and tarfile.is_tarfile(src):
+            r = sync.import_export(st, src)
+            return Out(r, f"imported {src}: logs {', '.join(r['logs']) or 'none new'}; {r['runs']} run(s)' records")
+        old = port.find(src)
+        if old is None:
+            raise KxError(f"no kx export or old ledger at {src}",
+                          fix="a file from kx export, or an old ledger.sqlite (its store folder, its repo)")
+        r = port.import_old(st, old)
+    return Out(r, port.summary(r))
 
 
 def cmd_doctor(a):
@@ -150,6 +169,9 @@ def register(cmd, group, action):
     s = cmd("data", cmd_data, "download missing or updated data and link it as data/")
     s.add_argument("--status", action="store_true")
     s.add_argument("--link", action="store_true")
-    s = cmd("backup", cmd_backup, "copy the ledger")
-    s.add_argument("--to")
+    s = cmd("export", cmd_export, "the whole history (every log, this machine's run records) in one file")
+    s.add_argument("path", nargs="?")
+    s = cmd("import", cmd_import, "a kx export, or an old ledger (default: this store's ledger.sqlite from kx before "
+                                  "the logs), into this one")
+    s.add_argument("path", nargs="?")
     cmd("doctor", cmd_doctor, "is this repo ready? (Kaggle, git, data, files, workers)")

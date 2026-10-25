@@ -27,7 +27,7 @@ from kx.guard import actors, budgets
 from kx.kaggle import data as _data
 from kx.ledger import config as _config
 from kx.ledger.config import KxError
-from kx.ledger.store import Store, age_s, now, rid
+from kx.ledger.store import Store, age_s, now
 from kx.remote import hosts
 from kx.remote.agent import BIG, LIVE_FILES, join
 from kx.remote.script import env_lines, env_spec, run_sh
@@ -43,7 +43,7 @@ OURS = ("/remote.json", "/run.sh", "/code/")  # kx's own files in the run dir: a
 LOW_DISK = 5 * 2**30       # with less free here, kx fetch leaves big files on the host: a full disk breaks the ledger
 
 
-def info(store: Store, run_id: int) -> dict | None:
+def info(store: Store, run_id: str) -> dict | None:
     p = store.run_dir(run_id) / INFO
     return json.loads(p.read_text()) if p.exists() else None
 
@@ -162,7 +162,7 @@ def run_remote(cmd: list[str], host_name: str, *, hypothesis=None, kind="experim
         row = store.get_run(r.id)
         root, sha = Path(row["worktree"]), row["git_sha"]
         cwd = os.path.relpath(Path.cwd().resolve(), root.resolve())
-        store.x("UPDATE runs SET host=?, gpus=? WHERE id=?", (h.name, gpus or h.gpus or None, r.id))
+        store.update("runs", {"host": h.name, "gpus": gpus or h.gpus or None}, id=r.id)
         t, w = h.transport, _where(h, comp.slug, r.name)
         print(f"kx: {r.name} on {h.name}: shipping the code and data it needs", file=sys.stderr)
         kx_hash = None if h.python else ship_kx(t, w["kx"])
@@ -287,7 +287,7 @@ def _note_on_host(t, inf: dict, d: Path) -> None:
     inf["on_host"] = [{"path": p, "bytes": n} for p, n in big if not ((d / p).is_file() and (d / p).stat().st_size == n)]
 
 
-def _poll(store: Store, run_id: int, inf: dict, again: bool = True) -> tuple[str, int | None]:
+def _poll(store: Store, run_id: str, inf: dict, again: bool = True) -> tuple[str, int | None]:
     """Copy the run dir back (its big files stay there); ('ended', code), ('running', None), ('gone', None) or
     ('unreachable', None)."""
     d = store.run_dir(run_id)
@@ -315,11 +315,11 @@ def _poll(store: Store, run_id: int, inf: dict, again: bool = True) -> tuple[str
     return "gone", None
 
 
-def _remote_run(st: Store, run_ref) -> tuple[int, dict]:
+def _remote_run(st: Store, run_ref) -> tuple[str, dict]:
     run_id = st.resolve(run_ref)
     inf = info(st, run_id)
     if inf is None:
-        raise KxError(f"{rid(run_id)} is not a remote run", fix=f"its files are here: kx path {rid(run_id)}")
+        raise KxError(f"{run_id} is not a remote run", fix=f"its files are here: kx path {run_id}")
     return run_id, inf
 
 
@@ -333,16 +333,17 @@ def fetch(run_ref, paths=()) -> dict:
         raise KxError("paths are relative to the run's dir, like latest.pt or ckpt/best.pt", code=2)
     _pull(_host(inf).transport, inf, d, full=not rels, only=rels)
     _save(d, inf)
-    return {"run": rid(run_id), "host": inf["host"], "fetched": rels or "all", "on_host": inf.get("on_host", [])}
+    return {"run": run_id, "host": inf["host"], "fetched": rels or "all", "on_host": inf.get("on_host", [])}
 
 
-def follow(run_id: int, *, act=None, echo: bool = True, from_start: bool = True) -> int:
+def follow(run_id: str, *, act=None, echo: bool = True, from_start: bool = True) -> int:
     """Stream a remote run's output until it ends, then record it. Ctrl-C stops following; the run goes on."""
     store = act.store if act is not None else Store(_config.load(), auto_backup=True)
     try:
         inf = info(store, run_id)
         if inf is None:
-            raise KxError(f"{rid(run_id)} is not a remote run")
+            raise KxError(f"{run_id} is not a remote run")
+        _only_ours(store, run_id, "follow")
         d, t = store.run_dir(run_id), _host(inf).transport
         offsets = {} if from_start else {n: (d / n).stat().st_size for n in ("stdout.log", "stderr.log") if (d / n).exists()}
         sniffer, polls, gone, down = ProgressSniffer(d), 0, 0, 0
@@ -365,8 +366,8 @@ def follow(run_id: int, *, act=None, echo: bool = True, from_start: bool = True)
             if act is not None:
                 act.hb.stop()
                 store.close()
-            print(f"\nkx: stopped following; {rid(run_id)} goes on on {inf['host']}. kx remote follow {rid(run_id)} · "
-                  f"kx remote kill {rid(run_id)}", file=sys.stderr)
+            print(f"\nkx: stopped following; {run_id} goes on on {inf['host']}. kx remote follow {run_id} · "
+                  f"kx remote kill {run_id}", file=sys.stderr)
             return 130
         sniffer.close()
         return finalize(store, run_id, inf, code, act=act)
@@ -375,7 +376,7 @@ def follow(run_id: int, *, act=None, echo: bool = True, from_start: bool = True)
             store.close()
 
 
-def finalize(store: Store, run_id: int, inf: dict, code: int | None, act=None, why: str | None = None) -> int:
+def finalize(store: Store, run_id: str, inf: dict, code: int | None, act=None, why: str | None = None) -> int:
     """Record a remote run that has ended (scores, notes, status) and charge its cost. Closes store."""
     d = store.run_dir(run_id)
     row = store.get_run(run_id)
@@ -402,7 +403,7 @@ def finalize(store: Store, run_id: int, inf: dict, code: int | None, act=None, w
         pass
     if inf.get("usd_per_hour") and hours is not None:
         budgets.charge(store, SimpleNamespace(name=row["author"]), "cloud_usd", round(inf["usd_per_hour"] * hours, 4),
-                       rid(run_id))
+                       run_id)
     inf.update(finished=now(), hours=hours, exit=code)
     _save(d, inf)
     if act is None:
@@ -415,9 +416,22 @@ def finalize(store: Store, run_id: int, inf: dict, code: int | None, act=None, w
     return code if code is not None else 1
 
 
+def ours(store: Store, row) -> bool:
+    """A run this machine launched: only it follows, kills and records it (another machine's remote.json comes with
+    kx sync, so its files can be fetched from anywhere)."""
+    return not row["writer"] or store.mine(row["writer"])
+
+
+def _only_ours(store: Store, run_id: str, what: str):
+    row = store.get_run(run_id)
+    if not ours(store, row):
+        raise KxError(f"{run_id} was launched from {row['writer']}: {what} it there", fix="kx sync shows how it ends")
+
+
 def running(store: Store) -> list:
-    return [r for r in store.all("SELECT * FROM runs WHERE status='running' ORDER BY id")
-            if (store.run_dir(r["id"]) / INFO).exists()]
+    """This machine's remote runs still going."""
+    return [r for r in store.all("SELECT * FROM runs WHERE status='running' ORDER BY n, id")
+            if (store.run_dir(r["id"]) / INFO).exists() and ours(store, r)]
 
 
 def sync(run_ref=None) -> list[dict]:
@@ -431,8 +445,10 @@ def sync(run_ref=None) -> list[dict]:
         st = Store(comp, auto_backup=True)
         try:
             inf, d = info(st, r["id"]), st.run_dir(r["id"])
-            item = {"run": rid(r["id"]), "host": inf["host"], "state": r["status"]}
-            if r["status"] != "running":
+            item = {"run": r["id"], "host": inf["host"], "state": r["status"]}
+            if r["status"] == "running" and not ours(st, r):
+                item["state"] = f"running, launched from {r['writer']}"
+            elif r["status"] != "running":
                 try:
                     _pull(_host(inf).transport, inf, d, full=True)
                     _save(d, inf)
@@ -457,8 +473,9 @@ def kill(run_ref) -> dict:
     st = Store(_config.load(), auto_backup=True)
     try:
         run_id, inf = _remote_run(st, run_ref)
+        _only_ours(st, run_id, "kill")
         if st.get_run(run_id)["status"] != "running":
-            raise KxError(f"{rid(run_id)} is not running")
+            raise KxError(f"{run_id} is not running")
         t = _host(inf).transport
         t.stop(inf)
         state, code, end = "running", None, time.time() + t.STOP_WAIT_S
@@ -474,7 +491,7 @@ def kill(run_ref) -> dict:
         if state == "unreachable":
             why += f" ({inf['host']} could not be reached: the run may go on there)"
         finalize(st, run_id, inf, code if code is not None else 143, why=why)
-        return {"run": rid(run_id), "host": inf["host"], "killed": True}
+        return {"run": run_id, "host": inf["host"], "killed": True}
     finally:
         st.close()
 

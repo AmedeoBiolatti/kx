@@ -20,8 +20,16 @@ print(json.dumps({"type": "result", "result": "all done", "num_turns": n}), flus
 '''
 
 
+def harness_dir(comp) -> Path:
+    """Where a fake harness lives: inside the competition (git-ignored .kx/), the only part of a pytest tmp dir the
+    worker sandbox (its own /tmp) shows."""
+    d = comp / ".kx"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 def setup(comp, steps: int, mode: str = "quit", caps: str = ""):
-    ws = comp.parent
+    ws = harness_dir(comp)
     (ws / "fake_harness.py").write_text(FAKE)
     argv = json.dumps([sys.executable, str(ws / "fake_harness.py"), str(steps), mode, "{prompt}"])
     y = comp / "comp.yaml"
@@ -33,7 +41,7 @@ def test_spawn_foreground_counts_tokens_and_reopens(comp, capsys, monkeypatch):
     setup(comp, 5)
     monkeypatch.setattr(runner, "UPDATE_EVERY_S", 0)
     code, t = run_kx("task", "add", "explore", capsys=capsys)
-    code, res = run_kx("spawn", f"T{t['id']}", "-w", "fake-1", "--foreground", capsys=capsys)
+    code, res = run_kx("spawn", t['id'], "-w", "fake-1", "--foreground", capsys=capsys)
     assert code == 0 and res["code"] == 0
     with open_store() as st:
         w = dict(st.one("SELECT * FROM workers"))
@@ -50,18 +58,18 @@ def test_token_budget_stops_worker(comp, capsys, monkeypatch):
     setup(comp, 200, caps="budgets: {workers: {fake-1: {tokens_per_day: 3000}}}\n")
     monkeypatch.setattr(runner, "UPDATE_EVERY_S", 0)
     code, t = run_kx("task", "add", "burn tokens", capsys=capsys)
-    code, res = run_kx("spawn", f"T{t['id']}", "-w", "fake-1", "--foreground", capsys=capsys)
+    code, res = run_kx("spawn", t['id'], "-w", "fake-1", "--foreground", capsys=capsys)
     with open_store() as st:
         w = dict(st.one("SELECT * FROM workers"))
         assert w["stop"].startswith("budget") and w["turns"] < 200
-    code, err = run_kx("spawn", f"T{t['id']}", "-w", "fake-1", "--foreground", capsys=capsys)
+    code, err = run_kx("spawn", t['id'], "-w", "fake-1", "--foreground", capsys=capsys)
     assert code == 4 and "tokens_per_day" in err["error"]
 
 
 def test_worker_that_finishes_its_task(comp, capsys, monkeypatch):
     setup(comp, 2, mode="finish")
     code, t = run_kx("task", "add", "quick", capsys=capsys)
-    code, res = run_kx("spawn", f"T{t['id']}", "-w", "fake-1", "--foreground", capsys=capsys)
+    code, res = run_kx("spawn", t['id'], "-w", "fake-1", "--foreground", capsys=capsys)
     with open_store() as st:
         task = st.one("SELECT * FROM tasks WHERE id=?", (t["id"],))
         assert task["status"] == "done" and task["outcome"] == "nope"
@@ -70,14 +78,14 @@ def test_worker_that_finishes_its_task(comp, capsys, monkeypatch):
 def test_spawn_refusals(comp, capsys, monkeypatch):
     setup(comp, 1)
     code, t = run_kx("task", "add", "x", capsys=capsys)
-    code, err = run_kx("spawn", f"T{t['id']}", "-w", "nobody", capsys=capsys)
+    code, err = run_kx("spawn", t['id'], "-w", "nobody", capsys=capsys)
     assert code == 1 and "fake-1" in err["fix"]
     monkeypatch.setenv("KX_AGENT", "fake-1")
-    code, err = run_kx("spawn", f"T{t['id']}", "-w", "fake-1", capsys=capsys)
+    code, err = run_kx("spawn", t['id'], "-w", "fake-1", capsys=capsys)
     assert code == 1 and "person driving" in err["error"]
     monkeypatch.delenv("KX_AGENT")
-    code, dry = run_kx("spawn", f"T{t['id']}", "-w", "fake-1", "--dry-run", capsys=capsys)
-    assert sys.executable in dry["argv"] and "T" + str(t["id"]) in dry["argv"][-1]
+    code, dry = run_kx("spawn", t['id'], "-w", "fake-1", "--dry-run", capsys=capsys)
+    assert sys.executable in dry["argv"] and t["id"] in dry["argv"][-1]
 
 
 def test_a_worker_writes_only_the_competition(comp, capsys, tmp_path):
@@ -92,14 +100,14 @@ def test_a_worker_writes_only_the_competition(comp, capsys, tmp_path):
               f"pathlib.Path({str(comp / 'inside.txt')!r}).write_text('ok')\n"
               f"pathlib.Path({str(tmp_mark)!r}).write_text('private')\n"
               f"try:\n    pathlib.Path({str(probe)!r}).write_text('escaped')\nexcept OSError:\n    pass\n")
-    ws = comp.parent
+    ws = harness_dir(comp)
     (ws / "probe_harness.py").write_text(script)
     argv = json.dumps([sys.executable, str(ws / "probe_harness.py"), "{prompt}"])
     y = comp / "comp.yaml"
     y.write_text(y.read_text() + f"workers: {{fake-1: {{harness: claude, model: sonnet, argv: {argv}}}}}\n")
     commit(comp, "workers")
     code, t = run_kx("task", "add", "probe", capsys=capsys)
-    run_kx("spawn", f"T{t['id']}", "-w", "fake-1", "--foreground", capsys=capsys)
+    run_kx("spawn", t['id'], "-w", "fake-1", "--foreground", capsys=capsys)
     try:
         assert (comp / "inside.txt").read_text() == "ok"
         assert not probe.exists() and not tmp_mark.exists()
