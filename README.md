@@ -29,7 +29,7 @@ kx doctor               # Kaggle CLI and login, git, data, docs, the workers' ha
 Each machine names itself in `~/.config/kx/machine.yaml`: `name: laptop` (default: its host name; two machines
 must not share one), and `share: gdrive:kx` to share projects with your other machines and people (see
 [The ledger](#the-ledger-machines-and-people)). `git pull` in the kx folder updates kx; then `kx init` in each
-competition repo updates its `docs/kx.md`, the rules agents read.
+competition repo updates its `docs/kx.md` (the rules agents read) and its skills.
 
 A competition repo then looks like this:
 
@@ -38,6 +38,7 @@ A competition repo then looks like this:
 ├── README.md  AGENTS.md  CLAUDE.md  comp.yaml  pyproject.toml
 ├── docs/competition.md     the Kaggle pages (kx meta)
 ├── docs/kx.md              the rules for whoever works here
+├── .agents/skills/         kx's skills: explain, catch up, video (.claude/skills/ links to them)
 ├── src/comp/evaluate.py    the evaluation protocol: the one place a score is defined
 ├── scripts/                entry points, run with kx exec
 ├── notebooks/
@@ -95,6 +96,23 @@ Any other command: `kx exec -H "hypothesis" [--probe] [--gpus 1] -- ./train.sh` 
 - Curves come from the whole of `metrics.jsonl`, cut for drawing to the first, last, lowest and highest point of
   each stretch of the run and both sides of every restart (`kx show R --curves` gives the same); a running run's
   chart fetches only what is new, every 5 seconds.
+
+## Explaining the work
+
+kx keeps the facts; explaining them is the agent's job, with three skills `kx init` puts in the repo
+(`.agents/skills/` for Codex, linked from `.claude/skills/` for Claude Code). They add no kx commands: they say
+which ones to run and how to put the answer together, so what the agent tells you can be checked.
+
+- **kx-explain**: the current solution (or a run, a task, a finding): how it works, how it got there, how sure we
+  are, with Mermaid diagrams (lineage, pipeline, what we learned). "Explain our solution", "why is r15 better than
+  r12".
+- **kx-catch-up**: what happened since a time, and what needs you: "catch me up since Friday".
+- **kx-video**: a short narrated explainer in the style of 3Blue1Brown (Manim, an offline Kokoro voice), every
+  number from kx: storyboard first, silent drafts whose frames the agent looks at, then voice and a 1080p render.
+  It ships a template (a run lineage, scores with error bars, training curves) and needs its own environment
+  (Manim with Cairo and Pango; the skill says how, with or without sudo).
+
+Explanations follow the links runs record: a run that builds on another should name it (`parent=`).
 
 ## wandb and MLflow
 

@@ -13,10 +13,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 
 TEMPLATE = Path(__file__).parent / "KX.md"
+SKILLS = Path(__file__).parent / "skills"  # kx-explain, kx-catch-up, kx-video: for the agent the person works with
 BLOCK = re.compile(r"<!-- kx:start -->.*?<!-- kx:end -->\n?", re.S)
 GITIGNORE = ["/data", ".kx/", ".venv/", "__pycache__/", "*.sqlite"]
 GUIDE = "docs/kx.md"
@@ -119,8 +121,49 @@ def upsert_block(path: Path, block: str) -> str:
     return f"added the kx section to {path.name}"
 
 
+def _tree(d: Path) -> dict:
+    return {str(p.relative_to(d)): p.read_bytes() for p in sorted(d.rglob("*"))
+            if p.is_file() and "__pycache__" not in p.parts}
+
+
+def write_skills(root: Path) -> list[str]:
+    """kx's skills in .agents/skills (Codex reads it) and .claude/skills (Claude Code), the second a link to the
+    first (a copy where links cannot be made). They are kx's: kx init rewrites them; other skills there stay."""
+    changed = []
+    for src in sorted(p for p in SKILLS.iterdir() if (p / "SKILL.md").is_file()):
+        want = _tree(src)
+        dest = root / ".agents" / "skills" / src.name
+        if not dest.is_dir() or dest.is_symlink() or _tree(dest) != want:
+            if dest.is_symlink() or dest.is_file():
+                dest.unlink()
+            elif dest.is_dir():
+                shutil.rmtree(dest)
+            for rel, data in want.items():
+                (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+                (dest / rel).write_bytes(data)
+            changed.append(src.name)
+        link = root / ".claude" / "skills" / src.name
+        target = Path("..", "..", ".agents", "skills", src.name)
+        if link.is_symlink() and Path(os.readlink(link)) == target:
+            continue
+        if not link.is_symlink() and link.is_dir() and _tree(link) == want:
+            continue  # a copy made where links cannot be, and up to date
+        if link.is_symlink() or link.is_file():
+            link.unlink()
+        elif link.is_dir():
+            shutil.rmtree(link)
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            shutil.copytree(dest, link)
+        if src.name not in changed:
+            changed.append(src.name)
+    return [f"skills {', '.join(changed)} in .agents/skills and .claude/skills"] if changed else []
+
+
 def write_agent_files(root: Path) -> list[str]:
-    done = [write_guide(root / GUIDE), upsert_block(root / "AGENTS.md", AGENTS_BLOCK)]
+    done = [write_guide(root / GUIDE), upsert_block(root / "AGENTS.md", AGENTS_BLOCK), *write_skills(root)]
     claude = root / "CLAUDE.md"
     if not claude.exists() or not claude.read_text().strip():  # Claude Code reads CLAUDE.md: the same instructions
         claude.write_text("@AGENTS.md\n@docs/kx.md\n")

@@ -66,9 +66,18 @@ with kx.run("what this run tests", config=cfg, seed=cfg["seed"], tags=["algorith
   - Code that logs to wandb or MLflow is recorded as it is (under `kx exec` and inside `kx.run`): keep it, do not
     log the same numbers twice. wandb sends nothing from a kx run unless `KX_WANDB=also`. Scores still need
     `r.score(...)` (or `scores.json`): a logged `val_auc` is a metric, not a score under a protocol.
+  - **A run that builds on another names it**: `kx.run(..., parent="r0012-fluent-sun")` or `kx exec --parent R`
+    (a tweak, a fix, a resume after a crash). How the solution got where it is can only be told from these links.
 - `kx compare A B` (paired test on the breakdown), `kx show R`, `kx runs`, `kx board`, `kx search WORDS`.
   `kx show R --json --curves` gives a run's curves cut to their shape (each stretch's first, last, lowest and
   highest point); every point is in `metrics.jsonl` under `kx path R`.
+
+## Explaining the work
+
+Skills in `.agents/skills/` (Claude Code reads them through `.claude/skills/`) help you explain the work to the
+person: `kx-explain` (the solution, a run, a task or a finding, with diagrams), `kx-catch-up` (what happened since
+a time, and what needs them), `kx-video` (a short narrated explainer). Use them when asked; they gather everything
+from kx, so what you say can be checked.
 
 ## Other machines
 

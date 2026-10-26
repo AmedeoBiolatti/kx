@@ -1,0 +1,7 @@
+# made by the scripts: kept out of git
+media/
+voice/
+logs/
+frames/
+*.mp4
+__pycache__/
