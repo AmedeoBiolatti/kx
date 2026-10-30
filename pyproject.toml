@@ -1,6 +1,6 @@
 [project]
 name = "kx"
-version = "2.0.0"
+version = "3.0.0"
 description = "The ledger and Kaggle interface of a competition: runs, scores, tasks, findings, submissions"
 requires-python = ">=3.11"
 dependencies = [
