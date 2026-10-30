@@ -22,7 +22,7 @@ You need git, [uv](https://docs.astral.sh/uv/), the Kaggle CLI logged in (`uv to
 ```bash
 git clone https://github.com/AmedeoBiolatti/kx && uv tool install --editable kx    # the kx command
 mkdir <competition-slug> && cd $_       # next to kx: competition repos sit beside it
-kx init                 # git repo, comp.yaml, docs, code skeleton, pyproject.toml, data
+kx init                 # git repo, comp.yaml, docs, code skeleton, pyproject.toml, the ledger, data
 uv sync && git add -A && git commit -m init
 kx doctor               # Kaggle CLI and login, git, data, docs, the workers' harnesses
 ```
@@ -51,6 +51,11 @@ A competition repo then looks like this:
 Everything for a competition is in its folder: deleting it deletes everything. `store:` in comp.yaml puts the
 store elsewhere (another disk). Never `git clean -x` in a competition repo: it would delete `.kx/`.
 
+Only `kx init` starts a ledger (and `kx import`, which brings one in). On a machine that shares nothing, any other
+command that finds none where comp.yaml says (the store moved, its disk is not mounted, `.kx/` was deleted) stops and
+says so, with the newest backup to restore, instead of going on as a project with no history. A machine with a
+`share:` goes on, saying so: `kx sync` brings the history back.
+
 ## Runs and scores
 
 ```python
@@ -76,6 +81,17 @@ in its own session (stop it with `kill PID`: it is recorded as failed); then `kx
 - `kx runs` · `show R` · `board` · `compare A B` · `search WORDS` · `note` · `tag` · `path` · `fetch` · `reap` · `gc`
 - Runs are `r0012-fluent-sun`: a number and a name, like wandb's (tasks `T7-quiet-otter`, findings `F3-…`,
   submissions `S5-…`). `r12`, `12` or `fluent-sun` find it.
+- Several runs side by side, with what you want of each, instead of code that reads their files:
+
+  ```bash
+  kx runs r1133..r1150 --cols score,cv5.se,config.lr,val_auc,summary.json:by_opponent.tusk
+  kx compare r1133 r1135 r1137 group:sweep      # each against r1133, one table
+  ```
+
+  A column is a score (`score` for the reference protocol, a protocol's name, `cv5.se`, `cv5.breakdown.f0`), the
+  config (`config.lr`), a logged metric's latest value, or a path into a JSON file the run wrote (`FILE:PATH`; a
+  `.jsonl` file's last record). A run that lacks it shows `–`; a column no run has comes back with the names that
+  are there.
 - `kx task start T7` links the runs you start to T7 until it is done.
 - To compare runs well, put every setting in `config=` and the seed in `seed=`, and log curves with a counter
   beside them (`r.step(i, loss=..., samples=n)`).
@@ -335,10 +351,14 @@ r0042 done
 Exit 0 when it happened (with `--all`: all of them). Exit 6 when it can no longer happen: the run failed, ended without reaching `--until`
 (kx says the last values, or which metrics it does log), lost its process, or went `--stall` minutes (default 30)
 without progress, metrics or output; or the submission or kernel errored. Exit 1 after `--timeout` minutes
-(default 120), with the same command to wait again. Each check reads the state afresh, so a wait keeps nothing: rerun
+(default 120), with where each target is (a run's progress and ETA, its latest metrics, the last line it printed)
+and the same command to wait again: a look at a long run is `kx wait R --timeout 20`, not reading its files. Each
+check reads the state afresh, so a wait keeps nothing: rerun
 it after a timeout or a lost session and it answers at once if it has already happened. Remote runs are copied back
 on each check (`kx remote sync`). Kaggle is asked at most once a minute, backing off to every 5 minutes, and not when
-anyone (another wait, `kx sync`) has just asked. With no target, `kx wait` blocks until a worker ends or something new
+anyone (another wait, `kx sync`) has just asked. A harness that cannot run a command in the background and wake
+the agent when it exits (Codex) runs the wait in the foreground with a long `--timeout`: kx returns as soon as the
+run ends, fails or stalls, so there is nothing to gain from short sleeps between looks. With no target, `kx wait` blocks until a worker ends or something new
 needs you.
 
 ## Workers

@@ -132,7 +132,9 @@ def _ref_scores(st: Store) -> tuple[dict, dict]:
 
 
 def cmd_runs(a):
+    from kx.runs import table as rt
     from kx.views.status import remote_host
+    cols = rt.split_cols(a.cols)
     with S() as st:
         where, params = [], []
         if a.task:
@@ -145,7 +147,12 @@ def cmd_runs(a):
             where.append("id IN (SELECT run_id FROM tags WHERE tag=?)")
             params.append(norm_tags([a.tag])[0])
         sql = "SELECT * FROM runs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY n DESC, created DESC LIMIT ?"
-        rows = st.all(sql, (*params, a.n))
+        if a.runs:  # in the order named; --task, --status, --tag still filter them
+            keep = {r["id"] for r in st.all(sql.replace(" LIMIT ?", ""), params)}
+            rows = [st.get_run(i) for i in rt.expand(st, a.runs) if i in keep]
+        else:
+            rows = st.all(sql, (*params, a.n))
+        reader = rt.Columns(st, cols) if cols else None
         ref, vals = _ref_scores(st)
         notes = st.last_notes()
         latest = {}  # run -> its latest score under any protocol, for runs without a reference score
@@ -173,11 +180,25 @@ def cmd_runs(a):
             if a.config:
                 d.update(config=loads(r["config"]), metrics=loads(r["metrics"]), seed=r["seed"], group=r["grp"], n=r["n"],
                          git_sha=r["git_sha"], command=loads(r["command"]) if (r["command"] or "").startswith("[") else r["command"])
+            if reader:
+                d["cols"] = reader.row(r)
+                data.append(d)
+                trows.append([d["run"], r["status"], *[rt.cell(d["cols"][c]) for c in cols], trunc(r["hypothesis"] or "", 60)])
+                continue
             data.append(d)
             shown = score(sc["value"], sc["se"]) if sc else (dim(f"{num(other['value'])} {other['protocol_id']}") if other else "")
             trows.append([d["run"], r["status"], ago(r["created"]), r["kind"][:5],
                           (r["author"] or "") + (f" @{d['host']}" if d["host"] else ""),
                           r['task'] if r["task"] else "", shown, r["hypothesis"] or ""])
+        absent = [c for c in cols if data and all(d["cols"][c] is None for d in data)]
+        hints = {c: reader.there(rows[0], c) for c in absent}
+    if cols:
+        out = {"runs": data, **({"not_found": hints} if hints else {})}
+        text = table(trows, ["run", "status", *cols, "hypothesis"]) if trows else "no runs"
+        for c, there in hints.items():
+            text += f"\n{c}: no run has it" + (f"; {rows[0]['id']} has {', '.join(there)}"
+                                               if there else "")
+        return Out(out, text)
     head = dim(f"score column: reference {ref['id']}" if ref["id"] else "no reference protocol yet")
     return Out(data, (table(trows, ["run", "status", "age", "kind", "by", "task", "score", "hypothesis"]) + "\n" + head)
                if trows else "no runs")
@@ -319,9 +340,16 @@ def cmd_board(a):
 
 def cmd_compare(a):
     from kx.runs.compare import compare
+    from kx.runs.table import expand
     with S() as st:
-        ra, rb = st.resolve(a.a), st.resolve(a.b)
-        st.get_run(ra), st.get_run(rb)
+        ra = st.resolve(a.a)
+        st.get_run(ra)
+        others = [i for i in expand(st, a.b) if i != ra]
+        if not others:
+            raise KxError(f"nothing to compare {ra} with", fix=f"kx compare {ra} r12 [r13 ...]", code=2)
+        if len(others) != 1 or len(a.b) > 1:
+            return _compare_many(ra, [(i, compare(st, ra, i, st.comp.z)) for i in others])
+        rb = others[0]
         res = compare(st, ra, rb, st.comp.z)
     data = {"a": ra, "b": rb, "comparable": res.comparable,
             "comparisons": [c.__dict__ for c in res.comparisons], "only_a": res.only_a, "only_b": res.only_b, "hints": res.hints}
@@ -334,6 +362,21 @@ def cmd_compare(a):
         lines.append("  not comparable: no shared protocol")
     lines += [f"  hint: {h}" for h in res.hints]
     return Out(data, "\n".join(lines), 0 if res.comparable else 5)
+
+
+def _compare_many(ra: str, results) -> Out:
+    """kx compare BASE R1 R2 ...: each against the base, one table."""
+    data = {"a": ra, "against": [{"b": rb, "comparable": res.comparable,
+                                       "comparisons": [c.__dict__ for c in res.comparisons], "hints": res.hints}
+                                      for rb, res in results]}
+    rows = [[rb, c.protocol, num(c.a), num(c.b), f"{c.delta:+.4g}", f"z={c.z:+.2f}" if c.z is not None else "",
+             f"{c.symbol} {c.verdict}"] for rb, res in results for c in res.comparisons]
+    rows += [[rb, "-", "", "", "", "", "not comparable: no shared protocol"] for rb, res in results
+             if not res.comparable]
+    better = [rb for rb, res in results if any(c.verdict == "better" for c in res.comparisons)]
+    text = f"against {ra}:\n" + table(rows, ["run", "protocol", ra, "value", "Δ", "z", "verdict"], indent=2)
+    text += "\n  better: " + (", ".join(better) if better else "none")
+    return Out(data, text, 0 if any(res.comparable for _, res in results) else 5)
 
 
 def cmd_search(a):
@@ -497,7 +540,11 @@ def register(cmd, group, action):
     s.add_argument("--needs", action="append", metavar="PATH", help="with --on: a part of the data folder besides "
                    "Kaggle's files (e.g. derived/fp-v1), sent to the host if missing there (repeatable)")
     s.add_argument("cmd", nargs=argparse.REMAINDER)
-    s = cmd("runs", cmd_runs, "recent runs, newest first")
+    s = cmd("runs", cmd_runs, "recent runs, newest first (or the runs named), with --cols what you want of each")
+    s.add_argument("runs", nargs="*", metavar="RUN", help="these runs: r12, r12..r20, group:NAME, latest, best")
+    s.add_argument("--cols", action="append", metavar="COLS",
+                   help="comma-separated: score, cv5 (a protocol), cv5.se, config.lr, val_auc (a logged metric), "
+                        "summary.json:by_deck.x (a JSON file the run wrote); repeatable")
     s.add_argument("-n", type=int, default=25)
     s.add_argument("--task")
     s.add_argument("--status", choices=("running", "done", "failed"))
@@ -514,9 +561,10 @@ def register(cmd, group, action):
     s.add_argument("protocol", nargs="?")
     s.add_argument("-n", type=int, default=20)
     s.add_argument("--all", action="store_true", help="every run, discarded and grouped ones too")
-    s = cmd("compare", cmd_compare, "is B better than A? (exit 5 when they share no protocol)")
+    s = cmd("compare", cmd_compare, "is B better than A? (several: each against A, one table; exit 5 when none "
+                                    "shares a protocol with A)")
     s.add_argument("a")
-    s.add_argument("b")
+    s.add_argument("b", nargs="+", help="r12, r12..r20, group:NAME")
     s = cmd("search", cmd_search, "runs, findings and tasks matching all the words")
     s.add_argument("words", nargs="+")
     s.add_argument("-n", type=int, default=15)

@@ -293,7 +293,11 @@ RULES = [
     "Submissions and kernel/dataset pushes show a preview and need --yes. Ask the person you work for before passing it; "
     "a worker's request goes to them instead (exit 3).",
     "To wait for a run, a metric (`--until 'val_auc>=0.9'`), a submission's score or a kernel, run `kx wait rN|SN|kernel:rN` "
-    "(in the background if you can) instead of polling; start runs with `kx exec --detach` to wait on them.",
+    "(in the background if you can; else in the foreground with a long --timeout: it returns early on failure or "
+    "stall, and on timeout says where each run is) instead of polling or reading its logs; start runs with "
+    "`kx exec --detach` to wait on them.",
+    "Read results with `kx runs R1 R2 ... --cols score,config.x,metric,FILE.json:path` and `kx compare BASE R1 R2 ...`, "
+    "not with code over run files.",
     "Exit codes: 0 ok · 1 error (read the fix: line) · 3 needs confirmation · 4 over a budget or limit · 5 not comparable "
     "· 6 kx wait: it can no longer happen. Every command takes --json.",
 ]

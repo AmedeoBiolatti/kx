@@ -4,6 +4,8 @@ a wait holds nothing: run it again after a timeout or a lost session and it answ
 
 A wait also returns when what it waits for can no longer happen: the run failed, ended short of the target, went
 silent, or lost its process; the submission or the kernel errored. kx wait exits 0 when it happened, UNMET otherwise.
+On a timeout it says where each target is (a run's progress, ETA, last metrics and output), so a look at a long run
+is one `kx wait R --timeout MIN`, not a read of its files.
 """
 
 from __future__ import annotations
@@ -19,11 +21,13 @@ from kx.ledger import config
 from kx.ledger.config import KxError
 from kx.ledger.store import Store, age_s, loads
 from kx.runs.compare import outcome, outcome_line
-from kx.runs.progress import number, records
+from kx.runs.progress import number, records, snapshot
+from kx.views.text import dur, num, trunc
 
 UNMET = 6                    # exit code: it ended (or stalled) without what was waited for
 KAGGLE_EVERY_S = (60, 300)   # Kaggle is asked at most this often by one wait, backing off from the first to the second
 ACTIVITY = ("progress.json", "metrics.jsonl", "stdout.log", "stderr.log")  # a run that touches none of them is silent
+SHOWN_METRICS = 6            # a pending run's state shows its --until metrics, then its latest others up to this many
 
 OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt, "<": operator.lt, "==": operator.eq}
 COND = re.compile(r"^\s*(?P<name>.+?)\s*(?P<op>>=|<=|==|>|<)\s*(?P<value>\S+)\s*$")
@@ -44,6 +48,20 @@ def condition(text: str) -> tuple[str, str, float]:
 
 def _later(every: float) -> float:
     return min(every * 1.5, KAGGLE_EVERY_S[1])
+
+
+def last_output(d, tail: int = 4096) -> tuple[str, float] | None:
+    """The last line the run printed (stdout or stderr, whichever was written last; a progress bar's last redraw) and
+    how long ago."""
+    logs = [f for f in (d / "stdout.log", d / "stderr.log") if f.exists() and f.stat().st_size]
+    if not logs:
+        return None
+    f = max(logs, key=lambda f: f.stat().st_mtime)
+    with f.open("rb") as fh:
+        fh.seek(max(0, f.stat().st_size - tail))
+        text = fh.read().decode(errors="replace")
+    lines = [x.strip() for x in re.split(r"[\r\n]", text) if x.strip()]
+    return (lines[-1][:200], time.time() - f.stat().st_mtime) if lines else None
 
 
 class RunTarget:
@@ -132,6 +150,38 @@ class RunTarget:
                                 + "; or wait longer: the same kx wait with --stall 0 (or more minutes)"}
         return None
 
+    def state(self) -> dict:
+        """Where the run is now: progress, ETA, latest metrics, last output."""
+        with Store(config.load()) as st:
+            row = st.get_run(self.id)
+            snap = snapshot(st, row)
+            silent = self._silent_s(st, row)
+            out = last_output(st.run_dir(self.id))
+        p, latest = snap["progress"], snap["latest_metrics"]
+        names = [n for n, _, _ in self.conds if n in latest]
+        names += [n for n in reversed(list(latest)) if n not in names][:max(0, SHOWN_METRICS - len(names))]
+        d = {"target": self.name, "status": row["status"], "running_s": round(age_s(row["created"]) or 0),
+             "silent_s": round(silent), "metrics": {n: latest[n] for n in names},
+             "progress": {k: p.get(k) for k in ("completed", "total", "unit", "phase", "percent", "eta_s")}
+             if p.get("completed") is not None else None,
+             **({"output": out[0], "output_s": round(out[1])} if out else {}),
+             **({"remote": self.remote_state} if self.remote_state else {})}
+        bits = [f"{self.name} {row['status']} {dur(d['running_s'])}"]
+        if (pr := d["progress"]) and pr.get("total"):
+            bits.append(f"{num(pr['completed'])}/{num(pr['total'])} {pr['unit']} ({pr['percent']:.0f}%)"
+                        + (f", eta {dur(pr['eta_s'])}" if pr.get("eta_s") else ""))
+        elif pr:
+            bits.append(f"{pr['phase']} {num(pr['completed'])} {pr['unit']}")
+        if d["metrics"]:
+            bits.append(", ".join(f"{k} {num(v)}" for k, v in d["metrics"].items()))
+        if out:
+            bits.append(f"output {dur(out[1])} ago: {trunc(out[0], 120)}")
+        elif silent > 60:
+            bits.append(f"silent {dur(silent)}")
+        if self.remote_state:
+            bits.append(f"host: {self.remote_state}")
+        return {**d, "text": " · ".join(bits)}
+
 
 class SubmissionTarget:
     """A submission: scored on Kaggle (met), or errored. Kaggle is asked through `kx sync`'s own code, at most every
@@ -170,6 +220,14 @@ class SubmissionTarget:
                 return None
             return self._settled(submit.find(st, self.name))
 
+    def state(self) -> dict:
+        from kx.kaggle import submit
+        with Store(config.load()) as st:
+            s = submit.find(st, self.name)
+        since = age_s(s["created"])
+        return {"target": self.name, "status": s["status"], "since_s": round(since or 0),
+                "text": f"{self.name} {s['status']} {dur(since or 0)} ago, not scored yet"}
+
 
 class KernelTarget:
     """The kernel version pushed for a run (kx kernel push R): complete (met), or error / cancelled."""
@@ -183,6 +241,7 @@ class KernelTarget:
         if row is None:
             raise KxError(f"no kernel pushed for {run_id}", fix=f"kx kernel push {run_id}")
         self.kernel, self.version = row["target"], row["version"]
+        self.status = None
 
     def check(self) -> dict | None:
         from kx.kaggle import client as kaggle
@@ -194,6 +253,7 @@ class KernelTarget:
         except KxError as e:
             print(f"kx: Kaggle not reached ({str(e).splitlines()[0]}); trying again", file=sys.stderr)
             return None
+        self.status = status
         ev = {"target": self.name, "kernel": self.kernel, "version": self.version, "status": status,
               "next": f"kx kernel status {self.id}"}
         if status == "complete":
@@ -201,6 +261,10 @@ class KernelTarget:
         if status == "error" or status.startswith("cancel"):
             return {**ev, "event": status, "met": False}
         return None
+
+    def state(self) -> dict:
+        return {"target": self.name, "status": self.status, "version": self.version,
+                "text": f"{self.name} (v{self.version}) {self.status or 'not asked yet'}"}
 
 
 def targets(refs, until=(), stall_s: float = 0) -> list:

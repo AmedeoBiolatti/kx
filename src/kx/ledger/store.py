@@ -407,9 +407,30 @@ def mine(log: str, me: str) -> bool:
     return log == me or log.startswith(me + "+")
 
 
+def missing_ledger(comp: Comp) -> KxError:
+    """No ledger (no log/, nor an old ledger.sqlite) where comp.yaml says, on a machine that shares nothing: kx does
+    not start an empty one in its place (a moved store, an unmounted disk or a deleted .kx/ would go on as a project
+    with no history); kx init does, for a new project or a new machine. A machine with a share goes on: kx sync
+    brings the history back."""
+    backups = sorted((comp.store / "backups").glob("log-*.tar.gz"), key=lambda p: p.stat().st_mtime) \
+        if (comp.store / "backups").is_dir() else []
+    fix = "a new project, or this project's first command on this machine: kx init (it creates the ledger; then " \
+          "kx sync brings what other machines wrote). If the store moved or its disk is not mounted, point comp.yaml " \
+          "store: at it"
+    if backups:
+        fix += f"; to restore the newest backup: tar xzf {backups[-1]} -C {comp.store}"
+    return KxError(f"no ledger at {comp.log_dir}: kx starts a new one only with kx init", fix=fix)
+
+
 class Store:
-    def __init__(self, comp: Comp, *, auto_backup: bool = False):
+    def __init__(self, comp: Comp, *, auto_backup: bool = False, create: bool = False):
         self.comp = comp
+        if not create and not comp.log_dir.is_dir() and not (comp.store / "ledger.sqlite").is_file():  # (kx import)
+            from kx.ledger.sync import location
+            if (share := location(comp)) is None:
+                raise missing_ledger(comp)
+            print(f"kx: no ledger at {comp.log_dir} yet: kx sync brings this project's history from {share} (what is "
+                  "written here before it is kept beside it)", file=sys.stderr)
         for d in (comp.store, comp.runs_dir, comp.log_dir):
             d.mkdir(parents=True, exist_ok=True)
         self.writer = writer()

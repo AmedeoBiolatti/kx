@@ -9,6 +9,7 @@ from pathlib import Path
 from kx.cli.common import Out, S
 from kx.ledger import config
 from kx.ledger.config import KxError
+from kx.ledger.store import Store
 from kx.views.text import dim, table
 
 
@@ -42,6 +43,9 @@ def cmd_init(a):
         cy.write_text(scaffold.render_comp_yaml(vals))
         done.append(f"wrote comp.yaml (kind {kind}, mode {vals['mode']}: review it)")
         comp = config.load(root)
+    if not comp.log_dir.is_dir():
+        Store(comp, create=True).close()
+        done.append(f"ledger: {comp.log_dir}")
     done += scaffold.write_agent_files(root)
     if not (root / competition.META_FILE).exists():
         try:
@@ -98,7 +102,7 @@ def cmd_export(a):
 def cmd_import(a):
     import tarfile
     from kx.ledger import port, sync
-    with S() as st:
+    with Store(config.load(), auto_backup=True, create=True) as st:  # bringing a history in may start the ledger
         src = Path(a.path).expanduser() if a.path else st.comp.store / "ledger.sqlite"
         if src.is_file() and tarfile.is_tarfile(src):
             r = sync.import_export(st, src)
@@ -132,6 +136,8 @@ def cmd_doctor(a):
         add(True, "data downloaded")
     except KxError:
         add(False, "data downloaded", "kx data")
+    from kx.ledger.store import missing_ledger
+    add(comp.log_dir.is_dir(), f"ledger at {comp.log_dir}", None if comp.log_dir.is_dir() else missing_ledger(comp).fix)
     add((comp.root / "docs" / "kx.md").exists(), "docs/kx.md (the rules for agents)", "kx init")
     add((comp.root / "pyproject.toml").exists(), "pyproject.toml (so code can import kx and comp)", "kx init")
     gpu = sh.which("nvidia-smi") is not None

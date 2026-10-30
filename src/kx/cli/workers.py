@@ -98,10 +98,12 @@ def _wait_for(a):
         if left <= 0:
             again = "kx " + " ".join(shlex.quote(x) for x in argv())
             pending = [t.name for t in ts if t.name not in settled]
+            state = [t.state() for t in ts if t.name not in settled]
             text = "\n".join(wait.line(ev) for ev in events)
-            return Out({"met": False, "events": events, "pending": pending, "why": "timeout", "again": again},
-                       (text + "\n" if text else "") + f"nothing more after {a.timeout:g} min: "
-                       f"{', '.join(pending)} still pending\n  wait again: {again}", 1)
+            return Out({"met": False, "events": events, "pending": pending, "state": state, "why": "timeout",
+                        "again": again},
+                       (text + "\n" if text else "") + f"nothing more after {a.timeout:g} min:\n"
+                       + "".join(f"  {s['text']}\n" for s in state) + f"  wait again: {again}", 1)
         time.sleep(min(a.poll, left))
 
 

@@ -8,6 +8,8 @@ import pytest
 import kx
 from kx.cli.main import main as kx_main
 from kx.kaggle import client as kaggle
+from kx.ledger import config
+from kx.ledger.store import Store
 
 
 def git(root: Path, *args):
@@ -88,6 +90,7 @@ def comp(tmp_path, monkeypatch, fake_kaggle):
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "init")
     monkeypatch.chdir(root)
+    Store(config.load(root), create=True).close()  # what kx init does
     for k in ("KX_AGENT", "KX_TASK", "KX_RUN_ID", "KX_RUN_DIR", "KX_ROOT"):
         monkeypatch.delenv(k, raising=False)
     return root

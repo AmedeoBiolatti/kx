@@ -65,6 +65,27 @@ def test_a_running_run_meets_stalls_or_times_out(comp, capsys):
         tracking.end(act)
 
 
+def test_a_timeout_says_where_the_run_is(comp, capsys):
+    """A look at a long run is the wait itself: progress, ETA, the --until metric first, the last line printed."""
+    act = tracking.begin("long", None)
+    try:
+        r = act.run
+        for i in range(3):
+            r.progress(i + 1, total=10, unit="epochs", loss=1 - i / 10, val_auc=0.7 + i / 100, lr=0.1)
+        (r.dir / "stdout.log").write_text("epoch 1\nepoch 2\r 30%|███ | 3/10\n")
+        code, res = run_kx("wait", r.name, "--until", "val_auc>=0.9", "--timeout", "0.001", "--poll", "0.01",
+                           capsys=capsys)
+        s = res["state"][0]
+        assert code == 1 and s["target"] == r.name and s["progress"]["completed"] == 3 and s["progress"]["total"] == 10
+        assert list(s["metrics"])[0] == "val_auc" and s["output"] == "30%|███ | 3/10"
+        from kx.cli.main import main
+        main(["wait", r.name, "--timeout", "0.001", "--poll", "0.01"])
+        text = capsys.readouterr().out
+        assert "3/10 epochs (30%)" in text and "output" in text and "3/10" in text
+    finally:
+        tracking.end(act)
+
+
 def test_a_submission_until_scored_or_failed(comp, fake_kaggle, monkeypatch, capsys):
     r = submittable(comp)
     run_kx("submit", r.name, "-m", "first", "--expect", "about 0.8", "--yes", capsys=capsys)

@@ -74,12 +74,19 @@ with kx.run("what this run tests", config=cfg, seed=cfg["seed"], tags=["algorith
 - `kx compare A B` (paired test on the breakdown), `kx show R`, `kx runs`, `kx board`, `kx search WORDS`.
   `kx show R --json --curves` gives a run's curves cut to their shape (each stretch's first, last, lowest and
   highest point); every point is in `metrics.jsonl` under `kx path R`.
+- **Read results with kx, not with code over run files.** `kx runs r12..r20 --cols score,cv5.se,config.lr,val_auc,
+  summary.json:by_deck.x` puts what you want of each run side by side: scores, config, logged metrics, and paths into
+  the JSON files a run wrote (`FILE:PATH`); a column no run has comes back with the names that are there.
+  `kx compare BASE r13 r14 group:sweep` compares each with BASE in one table.
 - **Wait with `kx wait`, do not poll.** `kx exec --detach -- cmd` returns once the run started; then
   `kx wait R` (it ended), `kx wait R --until 'val_auc>=0.9'` (a metric it logs, or a score: `cv5>=0.9`;
   repeatable, any one), `kx wait S4` (scored on Kaggle), `kx wait kernel:R`, `kx wait --all group:NAME` (every run
   of `kx exec --group NAME`). A run that ended comes with its score, rank and verdict against its parent or the
   best run (`kx exec` ends with the same line): no need for `kx show` and `kx compare` after. Run it in the
-  background when your harness can (you are woken when it exits), or in the foreground with `--timeout MIN`. Exit 0:
+  background when your harness can (you are woken when it exits). Otherwise (Codex) run it in the foreground with a
+  long `--timeout MIN` and let it block: it returns as soon as the run ends, fails or stalls, so short sleeps and
+  looks at its logs between buy nothing. On timeout it says where each run is (progress, ETA, latest metrics, last
+  line printed): that is the look at a run, not `cat progress.json` or `tail stdout.log`. Exit 0:
   it happened; 6: it can no longer happen (failed, stalled for `--stall` minutes, ended short of the target, errored
   on Kaggle), read why; 1: timed out, run the same command again.
 

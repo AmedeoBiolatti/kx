@@ -177,3 +177,44 @@ def test_a_score_split_from_the_main_version_says_so(comp, capsys):
     code, st = run_kx("status", capsys=capsys)
     churn = next(x for x in st["needs_you"] if x["kind"] == "protocol_churn")
     assert churn["ref"] == "bench" and "games" in churn["what"]
+
+
+def test_runs_side_by_side_with_the_columns_asked_for(comp, capsys):
+    """kx runs R... --cols: scores, config, logged metrics and the run's own JSON files, without code to read them."""
+    made = []
+    for i, (deck, v) in enumerate((("dragapult", 0.31), ("lucario", 0.42), ("tusk", 0.27))):
+        with kx.run(f"pilot {deck}", config={"lr": 0.1 * (i + 1), "decks": [deck]}) as r:
+            r.step(0, val_auc=(0.7, 0.8, 0.9)[i])
+            r.score(v, kx.Protocol("cv3", metric="auc", folds="f1"), breakdown={"f0": v, "f1": v})
+            (r.dir / "summary.json").write_text(json.dumps({"value": v, "by_opponent": {"old-tusk-1208": v / 2}}))
+        made.append(r)
+    code, res = run_kx("runs", f"{made[0].name}..{made[2].name}", "--cols",
+                       "score,cv3.se,config.lr,config.decks.0,val_auc", "--cols", "summary.json:by_opponent.old-tusk-1208",
+                       capsys=capsys)
+    assert code == 0 and [d["run"] for d in res["runs"]] == [r.name for r in made]
+    c = res["runs"][1]["cols"]
+    assert c["score"] == 0.42 and c["cv3.se"] == 0 and c["config.lr"] == 0.2 and c["config.decks.0"] == "lucario"
+    assert c["val_auc"] == 0.8 and c["summary.json:by_opponent.old-tusk-1208"] == 0.21
+    code, res = run_kx("runs", made[2].name, made[0].name, "--cols", "summary.json:by_opp.x,cfg", capsys=capsys)
+    assert [d["run"] for d in res["runs"]] == [made[2].name, made[0].name]
+    assert res["runs"][0]["cols"]["summary.json:by_opp.x"] is None
+    assert res["not_found"]["summary.json:by_opp.x"] == ["summary.json:value", "summary.json:by_opponent"]
+    assert "config.…" in res["not_found"]["cfg"]
+    kx_main(["runs", made[0].name, "--cols", "score,summary.json:by_opponent"])
+    assert "old-tusk-1208=0.155" in capsys.readouterr().out
+
+
+def test_compare_several_against_one(comp, capsys):
+    base = scored_run("base", {"f0": 0.80, "f1": 0.81, "f2": 0.79})
+    up = scored_run("up", {"f0": 0.90, "f1": 0.91, "f2": 0.905})
+    same = scored_run("same", {"f0": 0.801, "f1": 0.809, "f2": 0.792})
+    other = scored_run("elsewhere", {"f0": 0.5, "f1": 0.5}, protocol=kx.Protocol("holdout", metric="auc"))
+    code, res = run_kx("compare", base.name, f"{up.name}..{other.name}", capsys=capsys)
+    by = {x["b"]: x for x in res["against"]}
+    assert code == 0 and by[up.name]["comparisons"][0]["verdict"] == "better"
+    assert by[same.name]["comparisons"][0]["verdict"] == "within noise" and not by[other.name]["comparable"]
+    kx_main(["compare", base.name, up.name, same.name])
+    assert f"better: {up.name}" in capsys.readouterr().out
+    code, one = run_kx("compare", base.name, up.name, capsys=capsys)  # one run: as before
+    assert code == 0 and one["b"] == up.name
+    assert run_kx("compare", base.name, other.name, capsys=capsys)[0] == 5
