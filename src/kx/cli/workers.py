@@ -17,7 +17,8 @@ from kx.workers.runner import run
 from kx.workers.spawn import live, spawn, stop
 from kx.workers.streams import replay
 
-QUIET = ("no_reference", "sync")  # status items that do not end a `kx wait`: they are advice, not events
+# status items that do not end a `kx wait`: they are advice, not events
+QUIET = ("no_reference", "sync", "stale_task", "protocol_churn")
 
 
 def cmd_spawn(a):
@@ -73,7 +74,42 @@ def cmd_stop(a):
         res = stop(st, a.id)
     return Out(res, f"stopped {res['worker']} ({res['id']})")
 
+def _wait_for(a):
+    """kx wait TARGET ...: until one of them has happened, or can no longer happen."""
+    from kx import wait
+    from kx.cli.common import argv
+    began = time.monotonic()
+    deadline = began + a.timeout * 60
+    ts = wait.targets(a.targets, a.until or (), a.stall * 60)
+    settled = {}  # target name -> its event; with --all, each target is checked until it has one
+    while True:
+        new = [ev for t in ts if t.name not in settled and (ev := t.check())]
+        settled.update((ev["target"], ev) for ev in new)
+        events = list(settled.values())
+        if events and (not a.all or len(settled) == len(ts)):
+            met = all(ev["met"] for ev in events) if a.all else any(ev["met"] for ev in events)
+            text = "\n".join(wait.line(ev) for ev in events)
+            if a.all and len(events) > 1:
+                n_met = sum(ev["met"] for ev in events)
+                text += f"\nall {len(events)} settled: {n_met} as waited for" + ("" if met else f", {len(events) - n_met} not")
+            return Out({"met": met, "events": events, "waited_s": round(time.monotonic() - began)}, text,
+                       0 if met else wait.UNMET)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            again = "kx " + " ".join(shlex.quote(x) for x in argv())
+            pending = [t.name for t in ts if t.name not in settled]
+            text = "\n".join(wait.line(ev) for ev in events)
+            return Out({"met": False, "events": events, "pending": pending, "why": "timeout", "again": again},
+                       (text + "\n" if text else "") + f"nothing more after {a.timeout:g} min: "
+                       f"{', '.join(pending)} still pending\n  wait again: {again}", 1)
+        time.sleep(min(a.poll, left))
+
+
 def cmd_wait(a):
+    if a.targets:
+        return _wait_for(a)
+    if a.until:
+        raise KxError("--until needs a run to wait for", fix="kx wait r12 --until 'val_auc>=0.9'", code=2)
     from kx.views.status import needs_you
     deadline = time.monotonic() + a.timeout * 60
 
@@ -129,10 +165,22 @@ def register(cmd, group, action):
     s.add_argument("--all", action="store_true")
     s.add_argument("--show")
     s.add_argument("-n", type=int, default=25)
-    s = cmd("wait", cmd_wait, "block until a worker ends or something new needs you (--runs: or a run ends)")
+    s = cmd("wait", cmd_wait, "block until a run ends or reaches --until, a submission is scored, a kernel finishes "
+                              "(exit 0; 6 when it failed or stalled instead); with no target, until a worker ends or "
+                              "something new needs you")
+    s.add_argument("targets", nargs="*", metavar="TARGET",
+                   help="r12 (a run), group:NAME (its runs: kx exec --group), S4 (a submission), kernel:r12 (the kernel "
+                        "pushed for r12): returns on the first (--all: once each has)")
+    s.add_argument("--all", action="store_true", help="return once every target has ended, met or not (exit 0 only "
+                   "when all were as waited for)")
+    s.add_argument("--until", action="append", metavar="COND",
+                   help="for runs: NAME OP NUMBER on a metric it logs or a score (val_auc>=0.91, loss>5, cv5>=0.8, "
+                        "score>=0.8 for the reference protocol); repeatable, any one ends the wait")
+    s.add_argument("--stall", type=float, default=30,
+                   help="minutes a running run may go without progress, metrics or output (0: no limit)")
     s.add_argument("--timeout", type=float, default=120, help="minutes (exit 1 when nothing changed)")
-    s.add_argument("--poll", type=float, default=30, help="seconds between checks")
-    s.add_argument("--runs", action="store_true", help="also return when a running run finishes")
+    s.add_argument("--poll", type=float, default=30, help="seconds between checks (Kaggle: at most every minute)")
+    s.add_argument("--runs", action="store_true", help="with no target: also return when a running run finishes")
     s = cmd("stop", cmd_stop, "stop a running worker")
     s.add_argument("id")
     s = cmd("worker-run", cmd_worker_run, argparse.SUPPRESS)

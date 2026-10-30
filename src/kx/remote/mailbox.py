@@ -94,6 +94,15 @@ class Transport:
             return "running"  # queued: the agent takes it when a slot is free
         return "gone"
 
+    def remove(self, inf: dict) -> None:
+        """Delete the run from the mailbox, and leave a note for the agent to delete its own copy at its next look."""
+        if "/runs/r" not in inf["path"]:
+            raise KxError(f"{self.host.name}: refusing to delete {inf['path']}: not a run's folder")
+        self.write(join(self.host.mailbox, "_hosts", self.host.name, "clean", inf["key"].replace("/", "~")), "clean\n")
+        p = rclone("purge", inf["path"], check=False, timeout=600)
+        if p.returncode != 0 and "directory not found" not in p.stderr:
+            raise KxError(f"{self.host.name}: could not delete {inf['path']} from the mailbox: {p.stderr.strip()[-500:]}")
+
     def stop(self, inf: dict, force: bool = False) -> None:  # the agent sends TERM, then KILL itself
         self.write(join(self.host.mailbox, "_hosts", self.host.name, "kill", inf["key"].replace("/", "~")), "kill\n")
 

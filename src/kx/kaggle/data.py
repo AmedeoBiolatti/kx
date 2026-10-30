@@ -131,6 +131,8 @@ def download(comp: Comp, *, log=print) -> list[str]:
     dest.mkdir(parents=True, exist_ok=True)
     margin = GB  # left free after the download
     total = sum(f.get("size") or 0 for f in todo)
+    from kx.guard import rules
+    rules.check_room(comp, total, "the competition data")
     biggest = max(f.get("size") or 0 for f in todo)
     flat = all("/" not in f["name"] for f in todo)
     m = manifest(comp)

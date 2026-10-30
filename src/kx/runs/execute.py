@@ -125,16 +125,19 @@ def _signal_group(p, sig) -> None:
 
 
 def run_command(cmd: list[str], *, hypothesis: str | None = None, kind: str = "experiment", config=None,
-                tags=(), group=None, seed=None, parent=None, echo: bool = True, timeout=None, gpus: int = 0) -> tuple[int, int]:
-    """Run cmd as a tracked run; returns (run id, exit code)."""
+                tags=(), group=None, seed=None, parent=None, echo: bool = True, timeout=None, gpus: int = 0,
+                started=None, task=None) -> tuple[int, int]:
+    """Run cmd as a tracked run; returns (run id, exit code). started(run id) is called once the run exists."""
     if not cmd:
         raise KxError("nothing to run", fix="kx exec [options] -- <command> ...")
     from kx.runs.progress import number
     if timeout is not None and (not number(timeout) or timeout <= 0):
         raise KxError("timeout must be finite and positive")
     act = tracking.begin(hypothesis or " ".join(cmd), config, parent=parent, tags=tags, group=group, seed=seed,
-                         kind=kind, command=cmd, gpus=gpus)
+                         kind=kind, command=cmd, gpus=gpus, task=task)
     r = act.run
+    if started is not None:
+        started(r.id)
     env = project_python_env({**os.environ, "KX_RUN_ID": str(r.id), "KX_RUN_DIR": str(r.dir)}, None)
     env = with_capture(env)
     code, error = None, None
@@ -161,10 +164,10 @@ def run_command(cmd: list[str], *, hypothesis: str | None = None, kind: str = "e
                     p.wait()
                 _signal_group(p, signal.SIGKILL)  # a descendant can ignore TERM after its parent exits
                 code, error = 124, f"time limit exceeded ({timeout:g} seconds)"
-            except KeyboardInterrupt:
+            except KeyboardInterrupt as e:
                 _signal_group(p, signal.SIGTERM) if timeout is not None else p.terminate()
                 code = p.wait()
-                error = "interrupted (Ctrl-C)"
+                error = str(e) or "interrupted (Ctrl-C)"
             for t in threads:
                 t.join()
             sniffer.close()

@@ -313,3 +313,12 @@ def test_hosts_get_kaggle_files_and_only_the_parts_a_run_needs(box, comp, capsys
     assert not (host_data / "derived" / "other").exists()  # never asked for: never sent
     code, err = _exec(capsys, "--on", "box", "--needs", "../secrets", "--", "true")
     assert code == 2
+
+
+def test_kx_wait_copies_a_remote_run_back(box, comp, capsys):
+    """kx wait on a remote run syncs it on each check: its metrics arrive, and its end is recorded."""
+    code, out = _exec(capsys, "--on", "box", "--detach", "--", "python", "train.py")
+    code, res = run_kx("wait", out["run"], "--until", "cv3>=0.8", "--poll", "0.2", "--timeout", "0.5", capsys=capsys)
+    assert code == 0 and res["events"][0]["metric"] == "cv3"
+    code, res = run_kx("wait", out["run"], "--poll", "0.2", "--timeout", "0.5", capsys=capsys)
+    assert code == 0 and res["events"][0]["event"] == "done"

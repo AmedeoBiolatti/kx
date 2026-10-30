@@ -158,3 +158,22 @@ def test_runs_list_their_config_for_the_runs_table(comp, capsys):
     code, rows = run_kx("runs", "--config", capsys=capsys)
     assert code == 0 and rows[0]["config"] == {"lr": 0.01, "model": {"depth": 4}} and rows[0]["seed"] == 3
     assert rows[0]["metrics"]["acc"] == 0.9 and rows[0]["n"] == 1
+
+
+def test_a_score_split_from_the_main_version_says_so(comp, capsys):
+    """Run settings put in a protocol's spec make a new version per setting: kx says so on the run and in status."""
+    import kx
+    from conftest import scored_run
+    for i in range(3):
+        scored_run(f"main {i}", {"f0": 0.8, "f1": 0.81}, protocol=kx.Protocol("bench", metric="auc", games=64))
+    odd = scored_run("odd", {"f0": 0.8, "f1": 0.82}, protocol=kx.Protocol("bench", metric="auc", games=128))
+    code, show = run_kx("show", odd.name, capsys=capsys)
+    note = next(n["text"] for n in show["notes"] if "not the main version" in n["text"])
+    assert "3 score(s)" in note and "games: 64 -> 128" in note
+    code, res = run_kx("wait", odd.name, capsys=capsys)
+    assert res["events"][0]["result"]["split"][0]["main_scores"] == 3
+    for g in (256, 512):
+        scored_run(f"g{g}", {"f0": 0.8, "f1": 0.8}, protocol=kx.Protocol("bench", metric="auc", games=g))
+    code, st = run_kx("status", capsys=capsys)
+    churn = next(x for x in st["needs_you"] if x["kind"] == "protocol_churn")
+    assert churn["ref"] == "bench" and "games" in churn["what"]

@@ -17,6 +17,7 @@ In the mailbox (one folder per competition; what the machines exchange in _-pref
     _hosts/<name>/agent.json                 heartbeat: when, which machine, its GPUs and disk, the runs it has
     _hosts/<name>/jobs/<slug>~<run>/         a run to start: run.sh, code.tar.gz, patches; job.json written last
     _hosts/<name>/kill/<slug>~<run>          left by kx remote kill
+    _hosts/<name>/clean/<slug>~<run>         left once kx has all of an ended run (storage.keep: here): delete it here
     <slug>/data/<version>/                   competition data, once per version (.kx-complete written last)
     <slug>/runs/<run>/out/                   the run's KX_RUN_DIR, copied back by kx
 """
@@ -248,10 +249,21 @@ class Agent:
                 pass
         sent.touch()
 
+    def clean(self):
+        """Delete the runs kx has copied back whole (it leaves a `clean` note under storage.keep: here)."""
+        for name in self.lsf(join(self.box, "clean"), "--files-only"):
+            slug, _, run = name.partition("~")
+            d = self.base / slug / "runs" / run
+            if run and (not d.exists() or (d / ".agent-uploaded").exists()):  # never a run still going
+                shutil.rmtree(d, ignore_errors=True)
+                self.rclone("deletefile", join(self.box, "clean", name), check=False)
+                log(f"{slug}/{run}: deleted here (kx has all of it)")
+
     def once(self):
         self.heartbeat()
         self.take_jobs()
         self.tend()
+        self.clean()
 
     def loop(self):
         log(f"{self.name}: taking runs from {self.box} every {self.every:g} s (Ctrl-C stops the agent, not its runs)")

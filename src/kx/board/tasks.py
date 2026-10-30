@@ -14,6 +14,8 @@ from kx.runs import git
 RESULTS = ("positive", "negative", "inconclusive")
 OPEN = ("open", "active", "waiting")
 BRANCH = re.compile(r"^task/(T\d+[\w~-]*)")  # task/<task id>-<title slug> (kx spawn); older: task/T<n>-<slug>
+NAMED = re.compile(r"^\s*\[?(T\d+(?:-[a-z]+(?:-[a-z]+)+)?)\b")  # a hypothesis that starts with its task: "T16 ..."
+STALE_DAYS = 3  # an active task with nothing new for this long shows in kx status
 
 
 def get(store: Store, ref) -> dict:
@@ -22,9 +24,11 @@ def get(store: Store, ref) -> dict:
     return d
 
 
-def current(store: Store, root: Path | None = None, actor: str | None = None) -> str | None:
-    """The task this process works on: KX_TASK (a worker's), else a task/T<n>-... branch, else the one task `actor`
-    has started (kx task start) and not finished. None when that is ambiguous."""
+def current(store: Store, root: Path | None = None, actor: str | None = None,
+            hypothesis: str | None = None) -> str | None:
+    """The task this process works on: KX_TASK (a worker's), else a task/T<n>-... branch, else the task a
+    hypothesis starts with ("T16 ..."), else the task `actor` started last (kx task start) while it is still active,
+    else their one active task. None when none of these says."""
     if os.environ.get("KX_TASK"):
         try:
             return store.resolve(os.environ["KX_TASK"], "tasks")
@@ -46,13 +50,57 @@ def current(store: Store, root: Path | None = None, actor: str | None = None) ->
             except KxError:
                 continue
         return None
+    if named := named_task(store, hypothesis):
+        return named
     if actor:
-        mine = store.owners(actor)
-        active = store.all(f"SELECT id FROM tasks WHERE status='active' AND owner IN ({','.join('?' * len(mine))})",
-                           mine)
+        last = (store.setting("current_task") or {}).get(owner(actor))
+        row = store.one("SELECT status, owner FROM tasks WHERE id=?", (last,)) if last else None
+        if row and row["status"] == "active" and store.owns(row["owner"], actor):
+            return last
+        active = active_for(store, actor)
         if len(active) == 1:
-            return active[0]["id"]
+            return active[0]
     return None
+
+
+def named_task(store: Store, hypothesis: str | None) -> str | None:
+    """The task a hypothesis starts with ("T16 ...", "[T16-quiet-otter] ..."), when there is one, and only one."""
+    m = NAMED.match(hypothesis or "")
+    if not m:
+        return None
+    try:
+        return store.resolve(m.group(1), "tasks")
+    except KxError:
+        return None
+
+
+def active_for(store: Store, actor: str | None) -> list[str]:
+    """The tasks active for `actor` (default: whoever runs this), here."""
+    mine = store.owners(actor)
+    return [r["id"] for r in store.all(f"SELECT id FROM tasks WHERE status='active' AND owner IN "
+                                       f"({','.join('?' * len(mine))}) ORDER BY n, id", mine)]
+
+
+def relink_plan(store: Store) -> dict[str, list[str]]:
+    """Runs linked to no task whose hypothesis starts with one ("T16 ..."): {task: [run ids]}."""
+    out: dict[str, list[str]] = {}
+    for r in store.all("SELECT id, hypothesis FROM runs WHERE task IS NULL ORDER BY n, id"):
+        if t := named_task(store, r["hypothesis"]):
+            out.setdefault(t, []).append(r["id"])
+    return out
+
+
+def stale(store: Store, days: float = STALE_DAYS) -> list[dict]:
+    """Active tasks with nothing new (no update, note or run) for `days`."""
+    from kx.ledger.store import age_s
+    out = []
+    for t in store.all("SELECT * FROM tasks WHERE status='active'"):
+        last = max(x for x in (t["updated"], t["created"],
+                               store.one("SELECT MAX(ts) FROM task_notes WHERE task=?", (t["id"],))[0],
+                               store.one("SELECT MAX(created) FROM runs WHERE task=?", (t["id"],))[0]) if x)
+        if (age_s(last) or 0) > days * 86400:
+            out.append({**dict(t), "last": last})
+    return out
 
 
 def slug(title: str, n: int = 32) -> str:
@@ -108,7 +156,8 @@ def blockers(store: Store, t: dict) -> list[str]:
 
 def start(store: Store, ref, *, owner: str | None = None) -> dict:
     """Mark a task active, owned by `owner` (an actor name, default: whoever runs this; recorded with this machine:
-    codex-1@laptop); runs they start are linked to it."""
+    codex-1@laptop); it is their current task here: the runs they start are linked to it until it is done or they
+    start another, whatever else they left active."""
     t = get(store, ref)
     if t["status"] in ("done", "dropped"):
         raise KxError(f"{t['id']} is {t['status']}", fix=f"kx task reopen {t['id']}")
@@ -121,6 +170,7 @@ def start(store: Store, ref, *, owner: str | None = None) -> dict:
     # (by when they claimed it: `claimed`)
     store.update("tasks", {"status": "active", "owner": who, "waiting_on": None, "claimed": now(), "updated": now()},
                  id=t["id"], owner=t["owner"])
+    store.set_setting("current_task", {**(store.setting("current_task") or {}), who: t["id"]})
     return get(store, t["id"])
 
 

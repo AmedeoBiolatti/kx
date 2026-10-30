@@ -9,7 +9,7 @@ from kx.board import findings, tasks
 from kx.guard import budgets
 from kx.kaggle import competition, ladder, submit
 from kx.ledger.store import Store, age_s, loads, parse_ts
-from kx.runs.protocol import ranking, reference
+from kx.runs.protocol import CHURN_DAYS, CHURN_VERSIONS, churn, ranking, reference
 from kx.views.text import ago, bold, dim, dur, num, score, table, trunc, width
 
 NEEDS_SYNC_S = 12 * 3600
@@ -101,6 +101,34 @@ def needs_you(store: Store) -> list[dict]:
         out.append({"kind": "no_reference", "ref": None, "age_s": None,
                     "what": f"no reference protocol set: ranking under '{ref['name']}' (the most used lately)",
                     "fix": f"kx protocol use {ref['name']}  (kx protocol list)"})
+    # one line per kind, whatever the count: advice must not bury what needs you
+    if old := tasks.stale(store):
+        refs = [t["id"] for t in old]
+        out.append({"kind": "stale_task", "ref": refs[0], "refs": refs, "age_s": min(age_s(t["last"]) or 0 for t in old),
+                    "what": (f"{refs[0]} has" if len(refs) == 1 else f"{len(refs)} tasks have") + " been active with "
+                            f"nothing new for over {tasks.STALE_DAYS} days: {', '.join(refs[:8])}"
+                            + (" ..." if len(refs) > 8 else ""),
+                    "fix": "kx task done / wait / reopen each (kx task show T<n>)"})
+    if shaken := findings.shaken(store):
+        refs = list(dict.fromkeys(x["finding"] for x in shaken))
+        out.append({"kind": "finding_evidence", "ref": refs[0], "refs": refs, "age_s": None,
+                    "what": (f"{refs[0]} rests" if len(refs) == 1 else f"{len(refs)} findings rest") + " on runs that "
+                            f"failed after they were written: " + ", ".join(f"{x['finding']} ({x['run']})" for x in shaken[:6])
+                            + (" ..." if len(shaken) > 6 else ""),
+                    "fix": "kx finding show F<n>: withdraw or supersede the ones that no longer hold"})
+    if split := churn(store):
+        out.append({"kind": "protocol_churn", "ref": split[0]["name"], "refs": [c["name"] for c in split], "age_s": None,
+                    "what": f"{len(split)} protocol(s) got {CHURN_VERSIONS}+ versions in {CHURN_DAYS} days, splitting their "
+                            "scores into groups that do not compare: " + "; ".join(
+                                f"{c['name']} ({c['new_versions']}, changing {', '.join(c['changing'][:3])})" for c in split[:3])
+                            + (" ..." if len(split) > 3 else ""),
+                    "fix": "keep run settings in config=, not in kx.Protocol(...); kx protocol list"})
+    from kx.guard import rules
+    if (u := rules.usage(store.comp)) and u["left_gb"] <= 0.05 * u["max_gb"]:
+        out.append({"kind": "storage", "ref": None, "age_s": None,
+                    "what": f"the store holds {u['used_gb']:g} of its {u['max_gb']:g} GB (storage.max_gb)"
+                            + (": new runs are refused" if u["left_gb"] <= 0 else ""),
+                    "fix": "kx gc  (or raise storage.max_gb)"})
     for b in budgets.report(store):
         if b["left"] <= 0:
             out.append({"kind": "budget", "ref": b["key"], "age_s": None,
@@ -264,8 +292,10 @@ RULES = [
     "negative ones too.",
     "Submissions and kernel/dataset pushes show a preview and need --yes. Ask the person you work for before passing it; "
     "a worker's request goes to them instead (exit 3).",
-    "Exit codes: 0 ok · 1 error (read the fix: line) · 3 needs confirmation · 4 over a budget or limit · 5 not comparable. "
-    "Every command takes --json.",
+    "To wait for a run, a metric (`--until 'val_auc>=0.9'`), a submission's score or a kernel, run `kx wait rN|SN|kernel:rN` "
+    "(in the background if you can) instead of polling; start runs with `kx exec --detach` to wait on them.",
+    "Exit codes: 0 ok · 1 error (read the fix: line) · 3 needs confirmation · 4 over a budget or limit · 5 not comparable "
+    "· 6 kx wait: it can no longer happen. Every command takes --json.",
 ]
 
 
@@ -306,8 +336,24 @@ def context(store: Store, actor, task_id: int | None = None) -> dict:
         "findings": [{"id": f['id'], "status": f["status"], "tags": f["tags"], "text": f["text"]}
                      for f in findings.listing(store, limit=8)],
         "needs_you": st["needs_you"] if not actor.worker else [],
-        "rules": RULES,
+        "rules": RULES + project_rules(store.comp),
     }
+
+
+def project_rules(comp) -> list[str]:
+    """comp.yaml runs: and storage:, said in the rules an agent reads."""
+    from kx.guard import rules
+    out = []
+    if on := rules.run_hosts(comp):
+        out.append(f"This project's runs happen on {', '.join(on)} only (comp.yaml runs.on): `kx exec` sends them to "
+                   f"{on[0]} unless you pass `--on` another of them; nothing runs on this machine.")
+    if rules.keep_here(comp):
+        out.append("Every file a remote run makes comes back here when it ends and its copy on the host is deleted "
+                   "(storage.keep: here).")
+    if u := rules.usage(comp):
+        out.append(f"The store may hold {u['max_gb']:g} GB (storage.max_gb), {u['used_gb']:g} GB used: a run or a "
+                   "download over that is refused; `kx gc` previews what it can free.")
+    return out
 
 
 def render_context(cx: dict) -> str:

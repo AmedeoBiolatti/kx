@@ -215,6 +215,13 @@ class Transport:
             return "running"
         return "unreachable" if p.returncode == 255 and not self.host.local else "gone"
 
+    def remove(self, inf: dict) -> None:
+        """Delete the host's copy of a run that has ended (storage.keep: here, once it is all here)."""
+        path = inf["path"]
+        if "/runs/r" not in path:  # never anything but a run's folder
+            raise KxError(f"{self.host.name}: refusing to delete {path}: not a run's folder")
+        self.run(f"rm -rf -- {shlex.quote(path)}", timeout=600)
+
     def stop(self, inf: dict, force: bool = False) -> None:
         """TERM the run's process group (KILL with force)."""
         sig, pidf = "KILL" if force else "TERM", f"{shlex.quote(inf['path'])}/out/.remote/pid"

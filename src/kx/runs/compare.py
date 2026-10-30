@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from kx.ledger.config import DEFAULT_Z
 from kx.ledger.store import Store, loads
-from kx.runs.protocol import spec_diff
+from kx.runs.protocol import ranking, reference, spec_diff, split, split_text
 
 Z_THRESHOLD = DEFAULT_Z
 
@@ -176,3 +176,52 @@ def compare(store: Store, a: int, b: int, z_thr: float = Z_THRESHOLD) -> Result:
                     f"Re-score one of them under the other's protocol."
                 )
     return res
+
+
+def outcome(store: Store, run_id: str) -> dict | None:
+    """What a run that has just ended (or reached a target) came to, so whoever waited for it need not ask: its
+    scores, its rank under the reference protocol, and the verdict against its parent (when they share a protocol)
+    or else the best other run under the reference. None while it has no score."""
+    scores = store.scores_for(run_id)
+    if not scores:
+        return None
+    ref = reference(store)
+    out = {"scores": [{"protocol": s["protocol_id"], "value": s["value"], "se": s["se"]} for s in scores],
+           "reference": ref["id"]}
+    mine = next((s for s in scores if s["protocol_id"] == ref["id"]), None)
+    others = []  # the other done runs under the reference, best first
+    if mine is not None:
+        others = [r for r in ranking(store, ref["id"]) if r["id"] != run_id]
+        sign = 1 if mine["direction"] == "max" else -1
+        out["rank"] = 1 + sum(1 for r in others if sign * (r["value"] - mine["value"]) > 0)
+        out["of"] = len(others) + 1
+    base, why = None, None
+    parent = store.get_run(run_id)["parent"]
+    if parent and compare(store, parent, run_id).comparable:
+        base, why = parent, "parent"
+    elif others:
+        base, why = others[0]["id"], "best"
+    if base is not None:
+        res = compare(store, base, run_id, store.comp.z)
+        c = next((c for c in res.comparisons if c.protocol == ref["id"]), res.comparisons[0])
+        out["vs"] = {"run": base, "as": why, **c.__dict__, "symbol": c.symbol}
+    if splits := [sp for s in scores if (sp := split(store, s["protocol_id"]))]:
+        out["split"] = splits
+    return out
+
+
+def outcome_line(o: dict) -> str:
+    """outcome() in one line: 'cv5@ab12 0.8134 ±0.0021 · #2 of 41 · vs r0012 (best): +0.0031, z=+2.40 ▲ better'."""
+    from kx.views.text import score
+    main = next((s for s in o["scores"] if s["protocol"] == o["reference"]), o["scores"][0])
+    parts = [f"{main['protocol']} {score(main['value'], main['se'])}"]
+    if len(o["scores"]) > 1:
+        parts[0] += f" (+{len(o['scores']) - 1} other protocol{'s' if len(o['scores']) > 2 else ''})"
+    if "rank" in o:
+        parts.append(f"#{o['rank']} of {o['of']}")
+    elif o["reference"]:
+        parts.append(f"not scored under the reference {o['reference']}")
+    if v := o.get("vs"):
+        parts.append(f"vs {v['run']} ({v['as']}): {v['delta']:+.4g}" + (f", z={v['z']:+.2f}" if v["z"] is not None else "")
+                     + f" {v['symbol']} {v['verdict']}")
+    return " · ".join(parts) + "".join(f"\n  ! {split_text(sp)}" for sp in o.get("split", []))

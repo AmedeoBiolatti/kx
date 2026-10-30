@@ -26,7 +26,7 @@ from kx.runs import environment as _env, git
 from kx.runs.compare import se_from_breakdown
 from kx.runs import objects
 from kx.runs.objects import atomic_json
-from kx.runs.protocol import Protocol, register
+from kx.runs.protocol import Protocol, register, split, split_text
 
 RUN_KINDS = ("experiment", "probe")  # a probe may run on uncommitted code (its patch is saved)
 
@@ -113,8 +113,11 @@ def _record_score(store: Store, run_id: str, value, protocol, *, se=None, breakd
         n = n or n_auto
     elif n is None and breakdown:
         n = len(breakdown)
+    first = store.one("SELECT 1 FROM scores WHERE run_id=? AND protocol_id=?", (run_id, pid)) is None
     store.insert("scores", {"run_id": run_id, "protocol_id": pid, "value": value, "se": se, "n": n,
                             "breakdown": dumps(breakdown), "created": now()}, on="replace")
+    if first and (sp := split(store, pid)):  # kept on the run: a warning in its output is easily missed
+        store.add_note(run_id, "kx: " + split_text(sp) + ". Run settings belong in config=, not in the protocol")
     return pid
 
 
@@ -188,11 +191,16 @@ def _parent(store: Store, parent):
 
 
 def begin(hypothesis: str, config: dict | None = None, *, parent=None, tags=(), group=None, seed=None,
-          kind: str = "experiment", command: list[str] | None = None, gpus: int = 0) -> _Active:
-    """Create a running run (shared by kx.run and kx exec)."""
+          kind: str = "experiment", command: list[str] | None = None, gpus: int = 0, host: str | None = None,
+          task=None) -> _Active:
+    """Create a running run (shared by kx.run and kx exec; host: the remote host it runs on, None for here; task: the
+    task it is for, when the caller names it)."""
     if kind not in RUN_KINDS:
         raise KxError(f"run kind must be one of {RUN_KINDS}")
     comp = _config.load()
+    from kx.guard import rules
+    rules.check_host(comp, host)
+    rules.check_room(comp, what="a new run")
     store = Store(comp, auto_backup=True)
     try:
         _data.ensure_link(comp)
@@ -212,7 +220,7 @@ def begin(hypothesis: str, config: dict | None = None, *, parent=None, tags=(), 
         if seed is None and isinstance(config, dict) and isinstance(config.get("seed"), int):
             seed = config["seed"]
         env, _ = _env.capture(comp.main_root)
-        task_id = _tasks.current(store, root, who.name)
+        task_id = _tasks.get(store, task)["id"] if task else _tasks.current(store, root, who.name, hypothesis)
         with store.transaction():
             parent_id = _parent(store, parent)
             key = store.new("runs", {
@@ -231,6 +239,10 @@ def begin(hypothesis: str, config: dict | None = None, *, parent=None, tags=(), 
     hb = _Heartbeat(comp.db_path, r.id)
     hb.start()
     print(f"kx: started {r.name} ({kind}) -> {r.dir}", file=sys.stderr)
+    if task_id is None and len(active := _tasks.active_for(store, who.name)) > 1:
+        print(f"kx: {r.name} is linked to no task: {', '.join(active)} are all active for you. "
+              "`kx task start T<n>` makes one current (or kx exec --task T<n>, or start the hypothesis with T<n>)",
+              file=sys.stderr)
     return _Active(store, r, hb, time.monotonic(), gpus)
 
 

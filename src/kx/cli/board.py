@@ -46,6 +46,21 @@ def cmd_task(a):
         if act == "add":
             t = tasks.add(st, a.title, a.body or "", a.priority, a.depends or ())
             return Out(t, f"added {t['id']}: {t['title']}")
+        if act == "relink":
+            plan = tasks.relink_plan(st)
+            n = sum(len(v) for v in plan.values())
+            data = {"tasks": plan, "runs": n, "linked": a.yes and n > 0}
+            if not n:
+                return Out(data, "no unlinked run names a task")
+            text = "\n".join(f"  {k}: {len(v)} run(s), {v[0]}" + (f" .. {v[-1]}" if len(v) > 1 else "")
+                             for k, v in sorted(plan.items()))
+            if not a.yes:
+                return Out(data, f"{n} run(s) linked to no task start with one:\n{text}\n  link them: kx task relink --yes", 3)
+            with st.transaction():
+                for k, v in plan.items():
+                    for r in v:
+                        st.update("runs", {"task": k}, id=r, task=None)
+            return Out(data, f"linked {n} run(s) to the task their hypothesis starts with:\n{text}")
         t_id = a.id
         if act == "show":
             t = tasks.get(st, t_id)
@@ -60,7 +75,10 @@ def cmd_task(a):
             return Out({**t, "notes": n, "runs": runs, "findings": fnd}, text)
         if act == "start":
             t = tasks.start(st, t_id)
-            return Out(t, f"{t['id']} is active ({t['owner']}): your runs are linked to it until you finish it")
+            others = [x for x in tasks.active_for(st, None) if x != t["id"]]
+            return Out(t, f"{t['id']} is active ({t['owner']}): your runs are linked to it until you finish it or start "
+                          "another" + (dim(f"\n  also active for you: {', '.join(others)} (kx task done / wait / reopen)")
+                                       if others else ""))
         if act == "note":
             t = tasks.note(st, t_id, " ".join(a.text))
             return Out(t, f"noted on {t['id']}")
@@ -94,7 +112,8 @@ def cmd_finding(a):
     with S() as st:
         act = a.action
         if act == "add":
-            f = findings.add(st, a.text, a.evidence or (), a.tag or (), st.resolve(a.task, "tasks") if a.task else task_here(st))
+            f = findings.add(st, a.text, a.evidence or (), a.tag or (), st.resolve(a.task, "tasks") if a.task else task_here(st),
+                             partial=a.partial)
             unknown = [t for t in f["tags"] if st.comp.tags and t not in st.comp.tags]
             if unknown:
                 print(f"kx: note: {', '.join(unknown)} not in comp.yaml tags", file=sys.stderr)
@@ -129,8 +148,11 @@ def register(cmd, group, action):
                         ("merge", "merge the task branch into the main checkout and remove its worktree")):
         s = action(g, name, cmd_task, help_)
         s.add_argument("id")
-    s = action(g, "start", cmd_task, "mark a task active (yours): your runs are linked to it")
+    s = action(g, "start", cmd_task, "mark a task active (yours) and current: your runs are linked to it")
     s.add_argument("id")
+    s = action(g, "relink", cmd_task, "link the runs linked to no task to the task their hypothesis starts with "
+                                      "(\"T161 ...\"; preview, --yes links)")
+    s.add_argument("-y", "--yes", action="store_true")
     s = action(g, "note", cmd_task, "add a progress line")
     s.add_argument("id")
     s.add_argument("text", nargs="+")
@@ -155,6 +177,7 @@ def register(cmd, group, action):
     s.add_argument("--evidence", nargs="+")
     s.add_argument("--tag", action="append")
     s.add_argument("--task")
+    s.add_argument("--partial", action="store_true", help="evidence may be still running (the finding says so)")
     s = action(g, "list", cmd_finding, "open findings (--all: every one)")
     s.add_argument("--all", action="store_true")
     s.add_argument("--tag")

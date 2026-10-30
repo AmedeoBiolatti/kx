@@ -1,5 +1,6 @@
 """kx command line. Every command takes --json; exit codes: 0 ok, 1 error, 2 usage, 3 needs confirmation,
-4 over a budget or a Kaggle limit, 5 not comparable. The commands live in one module per area (kx.cli.runs, ...)."""
+4 over a budget or a Kaggle limit, 5 not comparable, 6 what kx wait waited for can no longer happen. The commands
+live in one module per area (kx.cli.runs, ...)."""
 
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--json", action="store_true", help="one JSON document on stdout")
     p = argparse.ArgumentParser(prog="kx", parents=[common],
                                 description="kx: the ledger and Kaggle interface of a competition. Start with `kx status`.",
-                                epilog="exit codes: 0 ok · 1 error · 2 usage · 3 needs confirmation · 4 over budget/limit · 5 not comparable")
+                                epilog="exit codes: 0 ok · 1 error · 2 usage · 3 needs confirmation · 4 over budget/limit · 5 not comparable · 6 kx wait: failed or stalled instead")
     sub = p.add_subparsers(dest="command", metavar="COMMAND")
 
     def add(subs, name, help_, **kw):

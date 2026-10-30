@@ -11,7 +11,8 @@ kx dashboard   # the same on a local web page (http://localhost:8765)
 ```
 
 Every command takes `--json`. Exit codes: `0` ok · `1` error (with a `fix:` line) · `2` usage · `3` needs
-confirmation · `4` over a budget or Kaggle limit · `5` not comparable.
+confirmation · `4` over a budget or Kaggle limit · `5` not comparable · `6` what `kx wait` waited for can no longer
+happen.
 
 ## Setup
 
@@ -66,12 +67,13 @@ A run also has `r.step(i, **metrics)` (training curves), `r.log(**metrics)` (sum
 `r.log_table(name, rows)`; `kx.score(R, value, PROTOCOL)` scores an earlier run, `kx.run_dir(R)` finds its files.
 
 Any other command: `kx exec -H "hypothesis" [--probe] [--gpus 1] -- ./train.sh` (it writes `scores.json` in
-`$KX_RUN_DIR`; a tqdm bar becomes its progress).
+`$KX_RUN_DIR`; a tqdm bar becomes its progress). `--detach` returns once the run has started and leaves it running
+in its own session (stop it with `kill PID`: it is recorded as failed); then `kx wait R`.
 
 - Scores compare only under the same protocol id (`name@fingerprint`). One protocol is the **reference**
   (`kx protocol use NAME`); `board`, `status` and `context` rank under it.
 - Experiments need committed code; `--probe` runs on uncommitted code and saves the patch.
-- `kx runs` · `show R` · `board` · `compare A B` · `search WORDS` · `note` · `tag` · `path` · `fetch` · `reap`
+- `kx runs` · `show R` · `board` · `compare A B` · `search WORDS` · `note` · `tag` · `path` · `fetch` · `reap` · `gc`
 - Runs are `r0012-fluent-sun`: a number and a name, like wandb's (tasks `T7-quiet-otter`, findings `F3-…`,
   submissions `S5-…`). `r12`, `12` or `fluent-sun` find it.
 - `kx task start T7` links the runs you start to T7 until it is done.
@@ -269,7 +271,9 @@ A v2 project keeps its ledger in `.kx/store/ledger.sqlite`; v3 never changes tha
 
 ```bash
 kx task add "try dart boosting" --body "..." -p 2 [--depends T3]
-kx task start T7                       # yours; the runs you start are linked to it
+kx task start T7                       # yours and current: the runs you start are linked to it
+kx exec --task T7 -- ...               # one run for another task (or start its hypothesis with "T7 ...")
+kx task relink [--yes]                 # link runs with no task to the task their hypothesis starts with
 kx task note T7 "fold 3 still worse"
 kx task wait T7 --on run:r12           # parked on run:rN, submission:SN, T3, a command for the person, or text
 kx task done T7 --result negative --outcome "dart did not help: -0.002"
@@ -278,6 +282,14 @@ kx task merge T7                       # a worker's task: merge its branch into 
 kx finding add "fold 3 leaks through user_id" --evidence r12 r15 --tag data
 kx finding withdraw F3 · kx finding supersede F3 --by F7
 ```
+
+A run is linked to the task it is for: a worker's, the one its branch is for, the one its hypothesis starts with
+("T7 ..."), or else the one you started last that is still active (a run linked to none while several are active
+says so). Evidence must be runs that have ended: a running one is refused (`kx wait rN` first, or `--partial`,
+which the finding then says), a failed one is accepted with a note. `kx status` lists, one line each kind: tasks
+active for over 3 days with nothing new, findings whose evidence failed after they were written, and protocols that
+got 3 or more versions in 7 days (run settings put in the spec split scores into groups that do not compare; a run
+scored under a version other than its name's most-scored one gets a note saying so, and so does its result line).
 
 ## Kaggle
 
@@ -293,6 +305,41 @@ code with `{"run", "git_sha", "datasets": {ref: run}}`, so the kernel can check 
 
 A worker (`KX_AGENT` set) does not send: with `--yes` kx refuses (exit 3) and prints the command. The worker records
 it with `kx task wait T7 --on "kx submit ... --yes"`; `kx status` shows it to you, and you run it.
+
+## Waiting
+
+`kx wait TARGET ...` blocks until what it names has happened, and also when it can no longer happen; an agent runs it
+in the background and is woken when it exits, instead of polling.
+
+```bash
+kx exec --detach -H "bigger model" -- python scripts/train.py      # r12 started in the background
+kx wait r12                                  # it ended: exit 0 done, 6 failed
+kx wait r12 --until 'val_auc>=0.91'          # a metric it logs reached a value (or a score: cv5>=0.9, score>=0.9)
+kx wait r12 --until 'val_auc>=0.91' --until 'loss>5'      # any one of them
+kx submit r12 -m "..." --yes && kx wait S4   # scored on Kaggle: exit 0, with the public score; 6 if it errored
+kx kernel push r12 --yes && kx wait kernel:r12            # the pushed kernel version completed
+kx wait r12 S4                               # the first of them
+kx wait --all group:sweep                    # every run of kx exec --group sweep (or --all r12 r13 ...)
+```
+
+A run that ended says what it came to, so there is nothing to ask afterwards: its score, its rank under the reference
+protocol, and `kx compare`'s verdict against its parent (`--parent`) or else the best other run:
+
+```
+r0042 done
+  cv5@3fa1 0.8134 ±0.0021 · #2 of 41 · vs r0012 (best): -0.0031, z=-1.20 ≈ within noise
+```
+
+`kx exec` ends with the same line.
+
+Exit 0 when it happened (with `--all`: all of them). Exit 6 when it can no longer happen: the run failed, ended without reaching `--until`
+(kx says the last values, or which metrics it does log), lost its process, or went `--stall` minutes (default 30)
+without progress, metrics or output; or the submission or kernel errored. Exit 1 after `--timeout` minutes
+(default 120), with the same command to wait again. Each check reads the state afresh, so a wait keeps nothing: rerun
+it after a timeout or a lost session and it answers at once if it has already happened. Remote runs are copied back
+on each check (`kx remote sync`). Kaggle is asked at most once a minute, backing off to every 5 minutes, and not when
+anyone (another wait, `kx sync`) has just asked. With no target, `kx wait` blocks until a worker ends or something new
+needs you.
 
 ## Workers
 
@@ -341,6 +388,33 @@ team slots), `kaggle_gpu_hours`, `tokens` and `cloud_usd` a person's (all their 
 machine.yaml), `gpu_hours` this machine's GPUs. `budgets: {scope: {tokens: team}}` changes one. A worker's own cap
 (`budgets.workers`) counts that worker on this machine. Another machine's usage counts once it has synced.
 
+## Where runs happen, where files live
+
+Rules of the project, in comp.yaml (so they hold on every machine that works on it):
+
+```yaml
+runs:
+  on: [colab, lambda]     # only these hosts: kx exec without --on uses the first, other hosts and this machine refuse
+storage:
+  keep: here              # remote runs leave nothing on their host
+  max_gb: 200             # the store here: runs, artifacts, data, backups
+```
+
+`runs.on` refuses (exit 4) a run anywhere else: `kx exec --on` another host, a local `kx exec`, a script calling
+`kx.run(...)` here. `storage.keep: here` changes how a remote run ends: every file comes back, files over 32 MB
+too; once kx has checked that all of them are here whole, it deletes the host's copy (a mailbox host's: from the
+mailbox, and its agent deletes its own copy at its next look). What cannot come back (the host is unreachable, the
+store has no room) stays on the host, listed by `kx show`, and the next `kx remote sync R` tries again.
+`storage.max_gb` refuses (exit 4) a new run, `kx fetch` and `kx data` once the store would go over it, naming the
+largest runs. `kx budget` shows `store: 143 / 200 GB`; `kx status` says when it is nearly full.
+
+`kx gc` frees space: it previews, and with `--yes` deletes, what runs nobody needs made (those tagged `discarded`,
+failed ones older than `--failed-days 7`, or the runs named), here and on their host. What kx recorded stays (the
+ledger, scores, notes, curves, logged tables, the end of the logs); runs a submission or a push came from, and the
+best run, are kept whole. Workers cannot pass `--yes`.
+
+Like the rest of kx these rules guard against mistakes: a command run without kx is not stopped.
+
 ## Develop
 
 ```bash
@@ -357,9 +431,10 @@ src/kx/
   remote/       hosts (ssh, mailbox), run.sh, kx exec --on (ship, launch, copy back, record), the mailbox agent
   board/        tasks and findings
   kaggle/       the Kaggle CLI client, competition pages, data, submissions, kernels, ladder
-  guard/        actors, budgets, and the gate on actions that leave the machine
+  guard/        actors, budgets, the project's rules (runs.on, storage), the gate on actions that leave the machine
   workers/      spawn (launch, stop, liveness), runner (the run loop), streams (harness output)
   sandbox.py    machine roles (workspace, executor) and the bubblewrap sandbox workers run in
+  wait.py       what kx wait waits for: runs (ended, --until, stalled), submissions, kernel versions
   views/        kx status / kx context, the dashboard, text rendering
   setup/        kx init (scaffold, docs/kx.md template)
   cli/          main.py (parser, dispatch) and one module of commands per area above

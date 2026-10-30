@@ -43,6 +43,8 @@ class Comp:
     workers: dict = field(default_factory=dict)
     max_workers: int = 2           # worker sessions at once (subscription plans share one allowance with you)
     tags: list = field(default_factory=list)
+    runs: dict = field(default_factory=dict)      # where runs happen: {on: [hosts]} (kx.guard.rules)
+    storage: dict = field(default_factory=dict)   # where files live: {keep: here, max_gb: N} (kx.guard.rules)
 
     @property
     def scoring(self):
@@ -154,6 +156,10 @@ def load(start: Path | None = None) -> Comp:
     budgets = _mapping(raw, "budgets", path)
     from kx.guard.budgets import validate
     validate(budgets, path)
+    runs, storage = _mapping(raw, "runs", path), _mapping(raw, "storage", path)
+    runs = {("on" if k is True else k): v for k, v in runs.items()}  # YAML 1.1 reads a bare `on:` key as true
+    from kx.guard import rules
+    rules.validate(runs, storage, path)
     workers = _mapping(raw, "workers", path)
     for name, w in workers.items():
         if not isinstance(w, dict) or w.get("harness") not in HARNESSES:
@@ -165,7 +171,8 @@ def load(start: Path | None = None) -> Comp:
         root=root, slug=slug, kind=kind, mode=mode, metric=str(metric.get("name", "score")), direction=direction,
         store=store, username=raw.get("username"), reference=raw.get("reference"), z=z,
         submission=_mapping(raw, "submission", path), budgets=budgets, workers=workers,
-        max_workers=int(raw.get("max_workers", 2)), tags=[t.strip().lower() for t in tags or []],
+        max_workers=int(raw.get("max_workers", 2)), tags=[t.strip().lower() for t in tags or []], runs=runs,
+        storage=storage,
     )
 
 

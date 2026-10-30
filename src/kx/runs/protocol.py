@@ -123,6 +123,45 @@ def register(store: Store, proto: Protocol) -> str:
     return pid
 
 
+def split(store: Store, pid: str) -> dict | None:
+    """When pid is not the most-scored version of its name: that version, how many scores it has (none of them
+    comparable with pid's) and what differs. Run settings put in a protocol's spec split its scores this way."""
+    row = store.one("SELECT name, spec FROM protocols WHERE id=?", (pid,))
+    if row is None or pid.startswith("kaggle:"):
+        return None
+    mine = store.one("SELECT COUNT(*) FROM scores WHERE protocol_id=?", (pid,))[0]
+    top = store.one("SELECT p.id, p.spec, COUNT(s.run_id) n FROM protocols p JOIN scores s ON s.protocol_id=p.id "
+                    "WHERE p.name=? AND p.id != ? GROUP BY p.id ORDER BY n DESC, p.created DESC LIMIT 1", (row["name"], pid))
+    if top is None or top["n"] < mine:
+        return None
+    versions = store.one("SELECT COUNT(*) FROM protocols WHERE name=?", (row["name"],))[0]
+    return {"protocol": pid, "name": row["name"], "main": top["id"], "main_scores": top["n"], "versions": versions,
+            "diff": spec_diff(loads(top["spec"]), loads(row["spec"]))}
+
+
+def split_text(sp: dict) -> str:
+    return (f"{sp['protocol']} is not the main version of {sp['name']} ({sp['versions']} versions): not comparable "
+            f"with the {sp['main_scores']} score(s) under {sp['main']}; it differs in " + "; ".join(sp["diff"][:4])
+            + (" ..." if len(sp["diff"]) > 4 else ""))
+
+
+CHURN_DAYS, CHURN_VERSIONS = 7, 3
+
+
+def churn(store: Store) -> list[dict]:
+    """Protocol names that got CHURN_VERSIONS or more new versions in CHURN_DAYS, with the spec keys that keep changing."""
+    import collections
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=CHURN_DAYS)).isoformat(timespec="seconds")
+    out = []
+    for r in store.all("SELECT name, COUNT(*) n FROM protocols WHERE created >= ? AND id NOT LIKE 'kaggle:%' GROUP BY name "
+                       "HAVING n >= ? ORDER BY n DESC", (since, CHURN_VERSIONS)):
+        specs = [loads(x["spec"]) for x in store.all("SELECT spec FROM protocols WHERE name=? ORDER BY created", (r["name"],))]
+        keys = collections.Counter(k for a, b in zip(specs, specs[1:]) for k in set(a) | set(b) if a.get(k) != b.get(k))
+        out.append({"name": r["name"], "new_versions": r["n"], "changing": [k for k, _ in keys.most_common(5)]})
+    return out
+
+
 def ensure_kaggle_protocols(store: Store):
     mode = store.comp.scoring
     for pid, desc in ((KAGGLE_PUBLIC, mode.public), (KAGGLE_PRIVATE, mode.private)):

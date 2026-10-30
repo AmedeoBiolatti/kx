@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from kx.cli.common import Out, S
-from kx.guard import actors, budgets
+from kx.guard import actors, budgets, rules
 from kx.views.text import dim, table
 
 
@@ -17,8 +17,9 @@ def cmd_budget(a):
                     u = budgets.used(st, m, w)
                     if u:
                         other.append({"metric": m, "window": w, "used": u})
-    if not rows and not other:
-        return Out({"caps": [], "uncapped": []}, "no budgets set (comp.yaml budgets:) and nothing used yet")
+        store = rules.usage(st.comp)
+    if not rows and not other and not store:
+        return Out({"caps": [], "uncapped": [], "store": None}, "no budgets set (comp.yaml budgets:) and nothing used yet")
     lines = []
     if rows:
         lines.append(table([[r["scope"], r["key"], f"{budgets.fmt(r['metric'], r['used'])} / {budgets.fmt(r['metric'], r['cap'])}",
@@ -27,7 +28,10 @@ def cmd_budget(a):
     if other:
         lines.append(dim("no cap: " + ", ".join(f"{o['metric']} {budgets.fmt(o['metric'], o['used'])} {budgets.WINDOWS[o['window']]}"
                                                  for o in other)))
-    return Out({"caps": rows, "uncapped": other}, "\n".join(lines))
+    if store:
+        lines.append(f"store: {store['used_gb']:g} / {store['max_gb']:g} GB (storage.max_gb), {store['left_gb']:g} GB left"
+                     + ("; kx gc frees what discarded and failed runs made" if store["left_gb"] < 0.1 * store["max_gb"] else ""))
+    return Out({"caps": rows, "uncapped": other, "store": store}, "\n".join(lines))
 
 
 def register(cmd, group, action):

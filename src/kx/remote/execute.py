@@ -23,7 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import kx
-from kx.guard import actors, budgets
+from kx.guard import actors, budgets, rules
 from kx.kaggle import data as _data
 from kx.ledger import config as _config
 from kx.ledger.config import KxError
@@ -145,7 +145,7 @@ def _code_archive(root: Path, sha: str, dest: Path):
 
 def run_remote(cmd: list[str], host_name: str, *, hypothesis=None, kind="experiment", config=None, tags=(), group=None,
                seed=None, parent=None, timeout=None, gpus: int = 0, detach=False,
-               echo=True, needs=()) -> tuple[int, int]:
+               echo=True, needs=(), task=None) -> tuple[int, int]:
     """Run cmd on a host as a tracked run; returns (run id, exit code). With detach, returns once it started."""
     if not cmd:
         raise KxError("nothing to run", fix="kx exec --on HOST [options] -- <command> ...")
@@ -156,7 +156,7 @@ def run_remote(cmd: list[str], host_name: str, *, hypothesis=None, kind="experim
         with Store(comp) as st:
             budgets.check(st, actors.current(), {"cloud_usd": h.usd_per_hour / 60})
     act = tracking.begin(hypothesis or shlex.join(cmd), config, parent=parent, tags=tags, group=group, seed=seed,
-                         kind=kind, command=cmd, gpus=0)
+                         kind=kind, command=cmd, gpus=0, host=h.name, task=task)
     store, r = act.store, act.run
     try:
         row = store.get_run(r.id)
@@ -287,6 +287,42 @@ def _note_on_host(t, inf: dict, d: Path) -> None:
     inf["on_host"] = [{"path": p, "bytes": n} for p, n in big if not ((d / p).is_file() and (d / p).stat().st_size == n)]
 
 
+def _whole_here(t, inf: dict, d: Path) -> bool:
+    """Is every file of the run's out/ on the host here, whole? (kx's own files are never copied: they do not count.)
+    Raises KxError when the host cannot be asked."""
+    return all((d / p).is_file() and (d / p).stat().st_size == n for p, n in t.list_big(f"{inf['path']}/out", "0K")
+               if not ("/" + p).startswith(OURS))
+
+
+def bring_home(store: Store, run_id: str, inf: dict) -> None:
+    """storage.keep: here, for a run that has ended: copy what is still on its host (when the store has room), check
+    that everything is here whole, then delete the host's copy. Whatever stays there (no room, host unreachable) is
+    listed in remote.json's on_host, for kx fetch; the next kx remote sync of the run tries again."""
+    d = store.run_dir(run_id)
+    t = _host(inf).transport
+    try:
+        _note_on_host(t, inf, d)
+        need = sum(x["bytes"] for x in inf.get("on_host", []))
+        left = rules.room(store.comp)
+        if need and left is not None and need > left:
+            print(f"kx: {run_id}: its {need / rules.GB:.1f} GB on {inf['host']} stay there: the store has "
+                  f"{max(left, 0) / rules.GB:.1f} GB left (storage.max_gb). kx gc, then kx fetch {run_id}",
+                  file=sys.stderr)
+            return
+        _pull(t, inf, d, full=True)
+        if inf.get("on_host") or not _whole_here(t, inf, d):
+            print(f"kx: {run_id}: not all of it came back from {inf['host']}: its copy there is kept "
+                  f"(kx fetch {run_id})", file=sys.stderr)
+            return
+        t.remove(inf)
+        inf["host_copy"] = "removed"
+    except KxError as e:
+        print(f"kx: {run_id}: its copy on {inf['host']} is kept ({str(e).splitlines()[0]}); "
+              f"kx remote sync {run_id} tries again", file=sys.stderr)
+    finally:
+        _save(d, inf)
+
+
 def _poll(store: Store, run_id: str, inf: dict, again: bool = True) -> tuple[str, int | None]:
     """Copy the run dir back (its big files stay there); ('ended', code), ('running', None), ('gone', None) or
     ('unreachable', None)."""
@@ -331,6 +367,10 @@ def fetch(run_ref, paths=()) -> dict:
     rels = [p.strip("/") for p in paths]
     if any(".." in Path(p).parts or not p for p in rels):
         raise KxError("paths are relative to the run's dir, like latest.pt or ckpt/best.pt", code=2)
+    if inf.get("host_copy") == "removed":
+        return {"run": run_id, "host": inf["host"], "fetched": [], "on_host": [], "all_here": True}
+    need = sum(x["bytes"] for x in inf.get("on_host") or [] if not rels or x["path"] in rels)
+    rules.check_room(st.comp, need, f"{run_id}'s files")
     _pull(_host(inf).transport, inf, d, full=not rels, only=rels)
     _save(d, inf)
     return {"run": run_id, "host": inf["host"], "fetched": rels or "all", "on_host": inf.get("on_host", [])}
@@ -406,6 +446,8 @@ def finalize(store: Store, run_id: str, inf: dict, code: int | None, act=None, w
                        run_id)
     inf.update(finished=now(), hours=hours, exit=code)
     _save(d, inf)
+    if rules.keep_here(store.comp):
+        bring_home(store, run_id, inf)
     if act is None:
         act = tracking._Active(store, tracking.Run(store, run_id), None, time.monotonic(), 0)
     try:
@@ -448,6 +490,11 @@ def sync(run_ref=None) -> list[dict]:
             item = {"run": r["id"], "host": inf["host"], "state": r["status"]}
             if r["status"] == "running" and not ours(st, r):
                 item["state"] = f"running, launched from {r['writer']}"
+            elif r["status"] != "running" and inf.get("host_copy") == "removed":
+                item["complete"] = True
+            elif r["status"] != "running" and rules.keep_here(comp) and ours(st, r):
+                bring_home(st, r["id"], inf)
+                item["complete"] = inf.get("host_copy") == "removed"
             elif r["status"] != "running":
                 try:
                     _pull(_host(inf).transport, inf, d, full=True)

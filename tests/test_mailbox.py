@@ -136,3 +136,21 @@ def test_the_mailbox_carries_kaggle_files_and_only_needed_parts(agent, mbox, com
     assert (cloud / "train.csv").exists() and (cloud / "derived/feat/x.txt").exists() and not (cloud / "derived/other").exists()
     far = next((mbox / "demo" / "data").iterdir())
     assert (far / "derived/feat/x.txt").read_text() == "feat" and not (far / "derived/other").exists()
+
+
+def test_keep_here_clears_the_mailbox_and_the_agents_copy(agent, mbox, comp, capsys):
+    with open(comp / "comp.yaml", "a") as f:
+        f.write("storage: {keep: here}\n")
+    commit(comp, "keep here")
+    code = kx_main(["exec", "--json", "--on", "mb", "--", "python", "train.py"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    d = Store(config.load()).run_dir(out["run"])
+    assert (d / "submission.csv").exists() and json.loads((d / "remote.json").read_text())["host_copy"] == "removed"
+    assert not (Path(os.environ["FAKE_RCLONE_ROOT"]) / "fake/kx/demo/runs" / out["run"]).exists()
+    notes = Path(os.environ["FAKE_RCLONE_ROOT"]) / "fake/kx/_hosts/mb/clean"
+    for _ in range(100):  # the agent deletes its own copy at its next look, then the note
+        if not (mbox / "demo" / "runs" / out["run"]).exists() and not list(notes.iterdir()):
+            break
+        time.sleep(0.1)
+    assert not (mbox / "demo" / "runs" / out["run"]).exists() and not list(notes.iterdir())

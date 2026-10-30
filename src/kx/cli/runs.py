@@ -11,6 +11,7 @@ from pathlib import Path
 
 from kx.board import findings, tasks
 from kx.cli.common import Out, S
+from kx.ledger import config
 from kx.ledger.config import KxError
 from kx.ledger.store import Store, loads, norm_tags
 from kx.views.text import ago, bold, dim, dur, num, score, table, trunc, width
@@ -35,20 +36,90 @@ def cmd_exec(a):
         a.on = sandbox.machine().get("default_host")
         if not a.on:
             sandbox.no_local_runs("a run")
+    if not a.on and not a.detached_to:
+        from kx.guard import rules
+        comp = config.load()
+        a.on = rules.default_host(comp)  # the project's runs happen on its hosts (comp.yaml runs.on)
+        if a.on:
+            print(f"kx: this project's runs happen on {', '.join(rules.run_hosts(comp))} (comp.yaml runs.on): "
+                  f"running on {a.on}", file=sys.stderr)
     if a.on:
         from kx.remote.execute import run_remote
         run_id, code = run_remote(cmd, a.on, hypothesis=a.hypothesis, kind="probe" if a.probe else "experiment",
                                   config=_config_arg(a.config), tags=a.tag or (), group=a.group, seed=a.seed,
                                   parent=a.parent, timeout=a.timeout, gpus=a.gpus or 0,
-                                  detach=a.detach, echo=not a.json, needs=a.needs or ())
-        return Out({"run": run_id, "exit": code, "host": a.on, "detached": a.detach}, None, code)
+                                  detach=a.detach, echo=not a.json, needs=a.needs or (), task=a.task)
+        return _ran(run_id, code, host=a.on, detached=a.detach)
     if a.detach:
-        raise KxError("--detach is for remote runs (--on HOST)", code=2)
+        return _detach(a)
+    started = None
+    if a.detached_to:  # the background half of kx exec --detach
+        import signal
+
+        def stopped(*_):
+            raise KeyboardInterrupt("stopped (SIGTERM)")
+        signal.signal(signal.SIGTERM, stopped)
+
+        def started(run_id):
+            tmp = Path(a.detached_to + ".tmp")
+            tmp.write_text(str(run_id))
+            tmp.replace(a.detached_to)
     run_id, code = run_command(cmd, hypothesis=a.hypothesis, kind="probe" if a.probe else "experiment",
                                config=_config_arg(a.config), tags=a.tag or (), group=a.group, seed=a.seed,
                                parent=a.parent, timeout=a.timeout, gpus=a.gpus or 0,
-                               echo=not a.json)
-    return Out({"run": run_id, "exit": code}, None, code)
+                               echo=not a.json and not a.detached_to, started=started, task=a.task)
+    return _ran(run_id, code)
+
+
+def _ran(run_id: str, code: int, **extra) -> Out:
+    """The end of kx exec: what the run came to (scores, rank, verdict against its parent or the best), so nobody
+    has to ask with kx show and kx compare."""
+    from kx.runs.compare import outcome, outcome_line
+    with S() as st:
+        o = None if extra.get("detached") else outcome(st, run_id)
+    return Out({"run": run_id, "exit": code, **extra, "result": o},
+               f"{run_id}: {outcome_line(o)}" if o else None, code)
+
+
+DETACH_START_S = 120  # how long kx exec --detach waits for its background half to create the run
+
+
+def _detach(a):
+    """kx exec --detach on this machine: the same command line runs in a session of its own (it outlives this process
+    and the terminal); this returns once its run exists, or with the error that kept it from starting."""
+    import subprocess
+    import tempfile
+    import time
+    from kx.cli import common
+    n = len(common.ARGV) - len(a.cmd)
+    head, tail = [x for x in common.ARGV[:n] if x not in ("--detach", "--json")], common.ARGV[n:]
+    at = head.index("exec") + 1
+    tmp = Path(tempfile.mkdtemp(prefix="kx-detach-"))
+    started, log = tmp / "run", tmp / "log"
+    child = [sys.executable, "-m", "kx", *head[:at], "--detached-to", str(started), *head[at:], *tail]
+    with log.open("wb") as out:
+        p = subprocess.Popen(child, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                             start_new_session=True)
+    try:
+        end = time.monotonic() + DETACH_START_S
+        while not started.exists():
+            if p.poll() is not None and not started.exists():
+                lines = log.read_text(errors="replace").strip().splitlines()
+                fix = next((x.strip()[5:] for x in lines if x.startswith("  fix: ")), None)
+                msg = "\n".join(x.removeprefix("kx: ") for x in lines if not x.startswith("  fix: "))
+                raise KxError(msg or f"the run did not start (exit {p.returncode})", fix=fix, code=p.returncode or 1)
+            if time.monotonic() > end:
+                raise KxError(f"the run has not started after {DETACH_START_S} s (process {p.pid})",
+                              fix=f"kx runs --status running, or stop it: kill {p.pid}")
+            time.sleep(0.1)
+        run = started.read_text().strip()
+    finally:
+        for f in (started, log):
+            f.unlink(missing_ok=True)
+        tmp.rmdir()
+    return Out({"run": run, "detached": True, "pid": p.pid},
+               f"{run} started in the background (pid {p.pid})\n"
+               f"  kx wait {run} [--until 'val_auc>=0.9'] · kx show {run} · stop it: kill {p.pid}")
 
 
 def _ref_scores(st: Store) -> tuple[dict, dict]:
@@ -328,9 +399,36 @@ def cmd_tag(a):
 def cmd_fetch(a):
     from kx.remote.execute import fetch
     r = fetch(a.run, a.paths)
+    if r.get("all_here"):
+        return Out(r, f"{r['run']}: all of it is here already (its copy on {r['host']} was deleted: storage.keep: here)")
     left = r["on_host"]
     return Out(r, f"{r['run']}: copied {'everything' if r['fetched'] == 'all' else ', '.join(r['fetched'])} from {r['host']}"
                   + (f"; still there: {', '.join(x['path'] for x in left)}" if left else ""))
+
+
+def cmd_gc(a):
+    from kx.cli.common import argv
+    from kx.guard import actors
+    from kx.runs import gc
+    with S() as st:
+        p = gc.plan(st, a.runs, a.failed_days)
+        kept = [f"  kept {k['run']}: {k['why']}" for k in p["kept"]]
+        if not p["runs"]:
+            return Out({**p, "freed": 0}, "\n".join(["nothing to delete", *kept]))
+        rows = [[r["run"], f"{r['bytes'] / 2**30:.2f} GB", r["why"], f"and its copy on {r['on_host']}" if r.get("on_host") else ""]
+                for r in p["runs"]]
+        text = "\n".join([table(rows, ["run", "frees", "why", ""]), *kept,
+                          f"{len(p['runs'])} run(s), {p['bytes'] / 2**30:.2f} GB here. What kx recorded stays (scores, "
+                          "notes, curves, logs' end); what the runs made goes."])
+        command = "kx " + " ".join(shlex.quote(x) for x in argv() if x not in ("-y", "--yes")) + " --yes"
+        if actors.current().worker:
+            raise KxError("workers do not delete run files", code=3, data={"preview": p, "command": command},
+                          fix=f"leave it to your person: they run `{command}`")
+        if not a.yes:
+            return Out({**p, "command": command}, f"{text}\n  delete them: {command}", 3)
+        res = gc.collect(st, p)
+    return Out({**p, **res}, f"freed {res['freed'] / 2**30:.2f} GB from {len(res['runs'])} run(s)"
+                             + "".join(f"\n  host copy kept: {e}" for e in res["host_errors"]))
 
 
 def cmd_path(a):
@@ -386,13 +484,16 @@ def register(cmd, group, action):
     s.add_argument("--probe", action="store_true", help="allow uncommitted code (the patch is saved)")
     s.add_argument("--tag", action="append")
     s.add_argument("--group")
+    s.add_argument("--task", help="the task it is for (default: your current one, kx task start)")
     s.add_argument("--seed", type=int)
     s.add_argument("--parent")
     s.add_argument("--config", help="JSON or @file.json")
     s.add_argument("--gpus", type=int, help="GPUs it uses: charged as gpu_hours (wall time × N)")
     s.add_argument("--timeout", type=float, help="seconds")
     s.add_argument("--on", metavar="HOST", help="run it on another machine (kx remote list)")
-    s.add_argument("--detach", action="store_true", help="with --on: return once it started (kx remote follow / sync)")
+    s.add_argument("--detach", action="store_true", help="return once it started; it goes on in the background "
+                   "(kx wait R; with --on: kx remote follow / sync)")
+    s.add_argument("--detached-to", help=argparse.SUPPRESS)
     s.add_argument("--needs", action="append", metavar="PATH", help="with --on: a part of the data folder besides "
                    "Kaggle's files (e.g. derived/fp-v1), sent to the host if missing there (repeatable)")
     s.add_argument("cmd", nargs=argparse.REMAINDER)
@@ -432,6 +533,11 @@ def register(cmd, group, action):
     s.add_argument("run")
     s.add_argument("paths", nargs="*", help="relative to the run's dir, e.g. latest.pt")
     cmd("reap", cmd_reap, "close runs whose process died")
+    s = cmd("gc", cmd_gc, "free the store: delete what discarded runs, failed ones and the runs named made (preview; --yes "
+                          "deletes); what kx recorded stays")
+    s.add_argument("runs", nargs="*", help="these runs (default: those tagged discarded, and failed ones)")
+    s.add_argument("--failed-days", type=float, default=7, help="failed runs older than this many days (default 7)")
+    s.add_argument("-y", "--yes", action="store_true", help="delete")
     s = cmd("progress", cmd_progress, "report progress from inside kx exec (non-Python commands)")
     s.add_argument("--completed", type=float, required=True)
     s.add_argument("--total", type=float)
