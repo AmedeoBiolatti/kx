@@ -71,7 +71,9 @@ def wrap(argv: list[str], writable: list[Path], *, cwd: Path | None = None) -> l
     home = Path.home()
     args = ["bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--tmpfs", "/tmp"]
     for rel in HIDDEN:
-        p = home / rel
+        # bwrap mounts over the real path: a login that is a symlink (~/.aws -> /mnt/c/Users/me/.aws, Windows' own
+        # under WSL) is hidden at its target, which the link then shows empty
+        p = (home / rel).resolve()
         if p.is_dir():
             args += ["--tmpfs", str(p)]
         elif p.exists():

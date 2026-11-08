@@ -88,3 +88,14 @@ def test_lb_bounds_from_last_submission_dates():
     # Oct 3: every team final, so each range closes on today's value
     assert b[2]["top"] == [0.95, 0.95] and b[2]["silver"] == [0.90, 0.90] and b[2]["bronze"] == [0.80, 0.80]
     assert set(lb_bounds(rows, medals=False)[0]) == {"day", "final", "top"}
+
+
+def test_only_an_http_401_is_a_login_failure():
+    from kx.kaggle.client import AUTH_FAILED
+    failures = ["401 Client Error: Unauthorized for url: https://www.kaggle.com/api/v1/competitions/list",
+                "(401)\nReason: Unauthorized", "HTTP Error 401", "status: 401", "Authentication required",
+                "Unauthenticated: token expired"]
+    fine = ["fileName  date  description  status  publicScore\nsub.csv  2026-11-01  baseline  complete  0.401",
+            "Uploading model.pt (401MB)", "run-401.csv  12KB", "401/401 [00:03<00:00]", "S401 scored 0.94"]
+    assert all(AUTH_FAILED.search(s) for s in failures)
+    assert not any(AUTH_FAILED.search(s) for s in fine)

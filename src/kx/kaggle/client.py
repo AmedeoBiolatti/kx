@@ -39,7 +39,10 @@ def _exe() -> str:
 # `kaggle auth login` (OAuth) keeps an access token that expires after hours. The CLI (2.2.3) neither refreshes it
 # for API calls nor saves the one `kaggle auth print-access-token` gets from the refresh token, so every call failed
 # with "Authentication required" once it expired. kx refreshes it itself and hands it over as KAGGLE_API_TOKEN.
-AUTH_FAILED = re.compile(r"Authentication required|401|Unauthenticated", re.I)
+# A bare 401 is not enough: it turns up in scores (0.401), sizes (401MB) and file names. Only a 401 the way HTTP
+# errors print it counts ("401 Client Error: Unauthorized", "(401)\nReason: Unauthorized", "HTTP 401", "status: 401").
+AUTH_FAILED = re.compile(r"Authentication required|Unauthenticated|\b401 (?:Client Error|Unauthorized)\b"
+                         r"|\(401\)\s*Reason|\b(?:HTTP(?: Error)?|status(?: code)?)[\s:=]*401\b", re.I)
 _fresh: tuple[str, datetime] | None = None
 
 
