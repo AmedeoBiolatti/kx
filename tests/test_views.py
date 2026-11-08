@@ -105,6 +105,7 @@ def test_the_dashboard_lists_every_competition_on_the_machine(comp, tmp_path, mo
         (d / "comp.yaml").write_text(f"slug: {d.name}\n")
         return d.resolve()
     elsewhere = competition(tmp_path / "elsewhere" / "far")
+    (elsewhere / ".kx" / "store" / "log").mkdir(parents=True)  # a ledger (the dashboard opens only those)
     config.load(elsewhere)  # opened once: remembered
     gone = competition(tmp_path / "gone" / "old")
     config.load(gone)
@@ -144,3 +145,51 @@ def test_nothing_to_show_says_where_to_look(tmp_path, monkeypatch):
     with pytest.raises(KxError, match="no competition") as e:
         dashboard.serve(0)
     assert "kx dashboard DIR" in e.value.fix
+
+
+def test_the_dashboard_leaves_a_store_without_a_ledger_of_this_kx_alone(comp, tmp_path, monkeypatch, capsys):
+    """A project with a kx v2 ledger (or none) is listed with what to run, and nothing is created in its store: no
+    log/, no cache; one it can open is shown first."""
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from kx.ledger import projects
+    from kx.views.dashboard import Handler, competitions, describe
+
+    monkeypatch.setattr(projects.Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(projects, "_kx_workspace", lambda: None)
+    old = tmp_path / "ws" / "old"
+    (old / ".kx" / "store").mkdir(parents=True)
+    (old / "comp.yaml").write_text("slug: old\n")
+    (old / ".kx" / "store" / "ledger.sqlite").write_bytes(b"")
+    new = tmp_path / "ws" / "fresh"
+    new.mkdir()
+    (new / "comp.yaml").write_text("slug: fresh\n")
+    before = {p for p in (tmp_path / "ws").rglob("*")}
+
+    d = describe("old", old)
+    assert "kx v2" in d["error"] and d["fix"].endswith("kx import")
+    assert "kx init" in describe("fresh", new)["fix"]
+    Handler.comps, Handler.default = {"demo": comp, "old": old}, "demo"
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        try:
+            urllib.request.urlopen(f"http://localhost:{httpd.server_address[1]}/api/status?comp=old", timeout=10)
+            raise AssertionError("served")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400 and json.load(e)["fix"].endswith("kx import")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert {p for p in (tmp_path / "ws").rglob("*") if not p.is_relative_to(comp)} == \
+        {p for p in before if not p.is_relative_to(comp)}  # nothing written in old/ or fresh/
+
+    monkeypatch.chdir(tmp_path)
+    projects.remember(old)  # used last, but cannot be opened: the one shown first is one that can
+    comps, default = competitions()
+    assert comps[default] == comp.resolve()

@@ -30,6 +30,7 @@ class FakeColab(http.server.ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), Handler)
         self.home, self.runtimes, self.deleted, self.cells, self.procs, self.specs_eligible = home, {}, [], [], [], {"T4"}
         self.pings, self.proxy_gets, self.expire = 0, 0, "2099-01-01T00:00:00Z"
+        self.agents = []  # pids of the agents the cells started: in their own session, so a cell's end leaves them
 
     @property
     def base(self):
@@ -130,6 +131,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.server.procs.append(p)
             try:
                 for line in p.stdout:
+                    if line.startswith(colab.STARTED):
+                        self.server.agents.append(int(line.split()[1]))
                     send(parent, "stream", {"name": "stdout", "text": line})
                 p.wait()
                 send(parent, "status", {"execution_state": "idle"})
@@ -182,6 +185,11 @@ def fake_colab(tmp_path, monkeypatch):
     for p in srv.procs:
         p.terminate()
         p.wait(10)
+    for pid in srv.agents:  # what deleting the runtime does on Colab: nothing of it goes on polling the mailbox
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            pass
     srv.shutdown()
 
 
@@ -295,4 +303,5 @@ def test_the_keeper_releases_an_idle_runtime_and_reconnects_before_the_token_exp
     assert _wait(lambda: log.exists() and log.read_text().count("connected to the kernel") >= 2)  # a fresh token each look
     assert _wait(lambda: fake_colab.deleted == ["kx-cb"])  # nothing ran for KX_COLAB_KEEP_IDLE_S: released
     assert _wait(lambda: "releasing the runtime" in log.read_text())
+
 

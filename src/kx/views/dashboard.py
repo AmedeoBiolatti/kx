@@ -172,10 +172,23 @@ def leaderboard(root: Path, protocol: str | None = None) -> dict:
             "bounds": bounds, "pairs": pairs, "fit": fit}
 
 
+def not_ready(comp) -> KxError | None:
+    """Why the dashboard leaves a competition's store alone: it has no ledger of this kx yet (opening it would start
+    one, beside an old ledger that kx import brings in, or where kx init should)."""
+    if comp.log_dir.is_dir():
+        return None
+    if (comp.store / "ledger.sqlite").is_file():
+        return KxError("its ledger is from kx v2, not imported yet", fix=f"cd {comp.main_root} && kx import")
+    return KxError(f"no ledger at {comp.log_dir}", fix=f"cd {comp.main_root} && kx init (then kx sync for what other "
+                   "machines wrote)")
+
+
 def describe(name: str, root: Path) -> dict:
     """What the header shows for a competition: kind, mode, metric, days left, its Kaggle pages."""
     try:
         comp = config.load(root)
+        if e := not_ready(comp):
+            raise e
         from kx.views.status import _deadline
         from kx.ledger.store import Store
         from kx.kaggle import competition
@@ -221,7 +234,14 @@ class Handler(BaseHTTPRequestHandler):
         slug = q.get("comp") or self.default
         if slug not in self.comps:
             raise KxError(f"unknown competition {slug!r}")
-        return self.comps[slug]
+        root = self.comps[slug]
+        try:
+            e = not_ready(config.load(root))
+        except KxError:
+            return root  # a broken comp.yaml: the command says what is wrong with it
+        if e:
+            raise KxError(f"{slug}: {e}", fix=e.fix)
+        return root
 
     def do_GET(self):
         if not self._host_ok():
@@ -306,8 +326,14 @@ def competitions(dirs=()) -> tuple[dict[str, Path], str]:
         here = None
     by_root = {v: k for k, v in comps.items()}
     default = by_root.get(here) if here else None
-    if default is None:
-        default = next((by_root[p] for p in projects.known() if p in by_root), next(iter(comps), ""))
+    if default is None:  # the most recently used one it can open
+        def ready(root):
+            try:
+                return not_ready(config.load(root)) is None
+            except KxError:
+                return False
+        order = [*(p for p in projects.known() if p in by_root), *comps.values()]
+        default = next((by_root[p] for p in order if ready(p)), next(iter(comps), ""))
     return comps, default
 
 
