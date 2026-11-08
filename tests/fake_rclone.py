@@ -1,5 +1,5 @@
 """A stand-in for rclone in tests: `name:path` is $FAKE_RCLONE_ROOT/name/path. Only what kx uses: copy, copyto, sync,
-lsf, cat, rcat, purge, mkdir, with --include/--exclude/--filter (rclone's glob rules), --max-size, -R."""
+lsf, cat, rcat, purge, mkdir, config show, with --include/--exclude/--filter (rclone's glob rules), --max-size, -R."""
 
 import os
 import re
@@ -44,7 +44,7 @@ def main(argv):
             elif a == "--files-from":
                 for line in Path(v).read_text().splitlines():
                     if line.strip():
-                        rules.append(("+", re.compile("^" + re.escape(line.strip().lstrip("/")) + "(/.*)?$")))
+                        rules.append(("+", re.compile("^" + re.escape(line.strip().lstrip("/")) + "$")))  # files only, as rclone
                 includes = True
         elif a.startswith("-"):
             flags.add(a)
@@ -67,6 +67,9 @@ def main(argv):
         return {p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}
 
     cmd, args = pos[0], pos[1:]
+    if cmd == "config" and args[:1] == ["show"]:  # a remote's section, with an app of its own (kx.remote.colab)
+        print(f"[{args[1]}]\ntype = drive\nclient_id = fake-client\nclient_secret = fake-secret\nscope = drive.file")
+        return 0
     if cmd in ("copy", "sync"):
         src, dst = resolve(args[0]), resolve(args[1])
         if src.is_file():

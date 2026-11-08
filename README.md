@@ -220,6 +220,21 @@ and the same Google app: with `drive.file`, files written by another app, such a
 invisible to it. Give rclone your own Google app (rclone's documentation: "Making your own client_id"): its shared
 one is rate-limited, which turns a one-second call into a minute.
 
+On **Colab**, kx can start the runtime itself through the Colab API:
+
+```yaml
+colab: {kind: mailbox, mailbox: gdrive:kx, launch: colab, accelerator: T4, gpus: 1, torch: cu126}
+```
+
+`kx remote login colab` signs in once (the rclone remote's own Google app, scope `colaboratory`). Then `kx exec --on
+colab` gets a runtime with that accelerator, starts the agent on it and runs the job. While the runtime exists, a
+small local process keeps a kernel connection open: Colab Pro reclaims a runtime with no client within half an hour.
+kx deletes the runtime when it records the last run on it ending, or 10 minutes after that run ends if it is not
+syncing (`kx remote release colab` deletes it now). Without `launch:`,
+`kx remote setup colab --notebook kx-colab.ipynb` writes a notebook to run by hand instead. Its first cell reads the
+rclone config from the Colab secret `KX_RCLONE_CONF` (paste `rclone config show gdrive` into it once); its second
+runs the agent for as long as the session lasts.
+
 ## The ledger: machines and people
 
 The ledger is a set of logs, `.kx/store/log/<user>@<machine>.jsonl`: every change (a run started, a score, a note, a

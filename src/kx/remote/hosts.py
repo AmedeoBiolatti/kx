@@ -16,6 +16,11 @@ a Transport: run a bash script there, copy files with rsync.
     farbox:
       kind: mailbox                 # unreachable from here: a kx agent there takes runs from shared storage
       mailbox: gdrive:kx            # an rclone remote:path both machines reach (kx.remote.mailbox)
+    colab:
+      kind: mailbox
+      mailbox: gdrive:kx
+      launch: colab                 # kx gets a Colab runtime and starts the agent there itself (kx.remote.colab)
+      accelerator: T4
 """
 
 from __future__ import annotations
@@ -56,6 +61,8 @@ class Host:
     torch: str | None = None        # a PyTorch wheel index for this host (cu126 for old GPUs): replaces the lock's torch
     mailbox: str | None = None      # kind mailbox: the rclone remote:path runs and results go through
     confine: bool = True            # runs in bubblewrap there when it has it (kx.remote.execute._confine_lines)
+    launch: str | None = None       # kind mailbox: kx starts the machine itself when a job waits (colab: kx.remote.colab)
+    accelerator: str | None = None  # launch colab: the runtime's accelerator (T4 by default; L4, A100, NONE for CPU)
 
     @property
     def transport(self) -> "Transport":
@@ -96,6 +103,9 @@ def load(comp=None) -> dict[str, Host]:
         if kind == "mailbox" and not h.get("mailbox"):
             raise KxError(f"host {name}: a mailbox host needs `mailbox: REMOTE:PATH` (an rclone location both machines reach)",
                           fix=f"edit {HOSTS_FILE}")
+        if h.get("launch") not in (None, "colab") or (h.get("launch") and kind != "mailbox"):
+            raise KxError(f"host {name}: launch must be colab, on a mailbox host",
+                          fix="kind: mailbox, mailbox: gdrive:kx, launch: colab")
         if kind not in ("ssh", "mailbox"):
             raise KxError(f"host {name}: unknown kind {kind!r}", fix="kind: ssh (the default) or mailbox")
         hosts[name] = Host(name=name, **h)

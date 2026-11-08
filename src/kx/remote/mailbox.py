@@ -53,8 +53,10 @@ class Transport:
             rclone("copyto", str(local), remote_path)
         elif files is None:
             rclone("sync" if delete else "copy", str(local), remote_path, *args)
-        else:
-            with file_list(files) as listing:
+        else:  # rclone's --files-from takes files only (a directory brings nothing): a directory goes as its files
+            listed = [str(p.relative_to(local)) for f in files for p in ([local / f] if not (local / f).is_dir()
+                      else sorted(x for x in (local / f).rglob("*") if x.is_file()))]
+            with file_list(listed) as listing:
                 rclone("copy", str(local), remote_path, "--files-from", listing, *args)
 
     def pull(self, remote_path: str, local: Path, *, excludes=(), max_size: str | None = None, only=()) -> None:
@@ -142,6 +144,44 @@ def check(h) -> list[dict]:
     if free is not None:
         add(free > 5, f"disk: {free:.0f} GB free there", "free space, or start the agent with --dir on a bigger disk")
     return out
+
+
+NOTEBOOK_SECRET = "KX_RCLONE_CONF"  # the Colab secret holding the mailbox remote's rclone config section
+
+
+def notebook(h) -> dict:
+    """A Colab notebook (nbformat 4) that turns its runtime into mailbox host `h`: it writes the rclone config from
+    the Colab secret KX_RCLONE_CONF (never stored in the notebook), installs rclone when missing, and runs the agent
+    in the foreground, so the cell runs as long as the host takes runs. Stopping the cell stops the agent."""
+    remote = h.mailbox.split(":", 1)[0] if ":" in h.mailbox else None
+    if not remote:
+        raise KxError(f"{h.name}: a notebook needs an rclone remote mailbox (REMOTE:PATH), not {h.mailbox!r}",
+                      fix=f"mailbox: gdrive:kx  (in hosts.yaml for {h.name})")
+    md = (f"# kx host `{h.name}` on Colab\n\nThis runtime takes `kx exec --on {h.name}` runs through the mailbox "
+          f"`{h.mailbox}`.\n\n1. *Runtime → Change runtime type*: pick a GPU{f' ({h.gpus} configured)' if h.gpus else ''}.\n"
+          f"2. Once: add a Colab secret (key icon, left) named `{NOTEBOOK_SECRET}` whose value is the output of "
+          f"`rclone config show {remote}` on the machine that runs kx, and give this notebook access. It holds the "
+          f"Drive login: keep it in the secret, not in a cell.\n3. Run both cells. The second keeps running while the "
+          f"host is up; `kx remote check {h.name}` there should then see it.\n\nColab ends idle or long sessions: a run "
+          f"cut off that way is recorded as lost, and the next session takes new runs.")
+    setup = "\n".join([
+        "import pathlib, shutil, subprocess",
+        "from google.colab import userdata",
+        "conf = pathlib.Path.home() / '.config/rclone/rclone.conf'",
+        "conf.parent.mkdir(parents=True, exist_ok=True)",
+        f"conf.write_text(userdata.get({NOTEBOOK_SECRET!r}).strip() + '\\n'); conf.chmod(0o600)",
+        "if shutil.which('rclone') is None:",
+        "    subprocess.run('curl -fsSL https://rclone.org/install.sh | bash', shell=True, check=True, stdout=subprocess.DEVNULL)",
+        f"subprocess.run(['rclone', 'lsf', '--max-depth', '1', {h.mailbox!r}], check=True)  # the mailbox is reachable",
+        "subprocess.run('nvidia-smi -L || echo no GPU on this runtime', shell=True)"])
+
+    def cell(kind, text):
+        c = {"cell_type": kind, "metadata": {}, "source": text.splitlines(keepends=True)}
+        return c | ({"execution_count": None, "outputs": []} if kind == "code" else {})
+    return {"nbformat": 4, "nbformat_minor": 4,
+            "metadata": {"accelerator": "GPU" if h.gpus else "None", "colab": {"name": f"kx-{h.name}.ipynb"},
+                         "kernelspec": {"name": "python3", "display_name": "Python 3"}},
+            "cells": [cell("markdown", md), cell("code", setup), cell("code", "!" + start_command(h).replace("python3 ", "python3 -u ", 1))]}
 
 
 def start_command(h) -> str:

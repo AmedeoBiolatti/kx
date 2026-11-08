@@ -212,7 +212,9 @@ def test_host_torch_index_swaps_in_the_locked_version(comp):
     key, locked, version = script.env_spec(comp, "HEAD", "cu126")
     assert version == "2.14.1" and locked and key.endswith("-cu126") and key != script.env_spec(comp, "HEAD")[0]  # its own env
     text = "\n".join(script.env_lines(key, locked, version, "cu126"))
-    assert "--index-url https://download.pytorch.org/whl/cu126" in text and "torch==2.14.1" in text
+    # that index's own build, pinned, searched before PyPI (uv looks in --extra-index-url first), and checked
+    assert "--extra-index-url https://download.pytorch.org/whl/cu126" in text and "torch==2.14.1+cu126" in text
+    assert "--index-url https://pypi.org/simple" in text and "endswith('\"'\"'+cu126'\"'\"')" in text
     assert "--all-extras" in text and "torch" not in "\n".join(script.env_lines(key, locked, None, None))
 
 

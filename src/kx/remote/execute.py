@@ -55,7 +55,8 @@ def _save(run_dir: Path, inf: dict):
 def _host(inf: dict) -> hosts.Host:
     """The host as it was when the run started (a later edit of hosts.yaml does not lose the run)."""
     if inf.get("kind") == "mailbox":
-        return hosts.Host(name=inf["host"], kind="mailbox", mailbox=inf["mailbox"], dir=inf["dir"])
+        return hosts.Host(name=inf["host"], kind="mailbox", mailbox=inf["mailbox"], dir=inf["dir"], launch=inf.get("launch"),
+                          accelerator=inf.get("accelerator"))
     return hosts.Host(name=inf["host"], ssh=inf.get("ssh"), local=bool(inf.get("local")), dir=inf["dir"],
                       ssh_opts=inf.get("ssh_opts") or [])
 
@@ -165,7 +166,7 @@ def run_remote(cmd: list[str], host_name: str, *, hypothesis=None, kind="experim
         store.update("runs", {"host": h.name, "gpus": gpus or h.gpus or None}, id=r.id)
         t, w = h.transport, _where(h, comp.slug, r.name)
         print(f"kx: {r.name} on {h.name}: shipping the code and data it needs", file=sys.stderr)
-        kx_hash = None if h.python else ship_kx(t, w["kx"])
+        kx_hash = None if h.python and not h.launch else ship_kx(t, w["kx"])  # a launched agent starts from these
         version = ship_data(t, comp, w["data"], needs)
         script = run_sh(h, r.id, r.name, cmd=cmd, cwd="." if cwd.startswith("..") else cwd, data_version=version,
                         env=env_spec(root, sha, h.torch), timeout=timeout)
@@ -180,7 +181,8 @@ def run_remote(cmd: list[str], host_name: str, *, hypothesis=None, kind="experim
             t.push(job, w["job"])
         inf = {"host": h.name, "kind": h.kind, "dir": h.dir, "path": w["path"], "sha": sha, "data_version": version,
                "usd_per_hour": h.usd_per_hour, "launched": now(), "synced": None}
-        inf |= ({"mailbox": h.mailbox, "job": w["job"], "key": f"{comp.slug}/{r.name}"} if h.kind == "mailbox"
+        inf |= ({"mailbox": h.mailbox, "job": w["job"], "key": f"{comp.slug}/{r.name}", "launch": h.launch,
+                 "accelerator": h.accelerator} if h.kind == "mailbox"
                 else {"ssh": h.ssh, "local": h.local, "ssh_opts": h.ssh_opts})
         _save(r.dir, inf)
         t.start(w["job"], json.dumps({"run": r.name, "slug": comp.slug, "sha": sha, "kx_hash": kx_hash, "python": bool(h.python),
@@ -189,6 +191,14 @@ def run_remote(cmd: list[str], host_name: str, *, hypothesis=None, kind="experim
         (r.dir / INFO).unlink(missing_ok=True)  # it never started there: close it like a local run
         tracking.end(act, f"could not start on {h.name}: {e}")
         raise
+    if h.launch == "colab":  # the job waits in the mailbox: start a runtime and its agent unless one is up
+        from kx.remote import colab
+        try:
+            colab.ensure(h)
+        except KxError as e:
+            print(f"kx: {r.name} waits in the mailbox: could not start a Colab runtime for {h.name}: {e}"
+                  + (f"\n  fix: {e.fix}" if getattr(e, "fix", None) else "") + f"\n  then: kx remote launch {h.name}",
+                  file=sys.stderr)
     if detach:
         act.hb.stop()
         store.close()
@@ -217,7 +227,7 @@ def setup(host_name: str) -> dict:
         p = t.run(("KX_NO_UV=1\n" if h.python else "") + PREREQS, check=False, timeout=900)
         if p.returncode != 0:
             raise KxError(f"{h.name}: {(p.stderr or p.stdout).strip()[-800:]}", fix=f"install it on {h.name}")
-    if not h.python:
+    if not h.python or h.launch:  # a launched agent starts from the kx sources in the mailbox
         ship_kx(t, w["kx"])
     version = ship_data(t, comp, w["data"])
     out = {"host": h.name, "data_version": version, "env": None}
@@ -446,6 +456,8 @@ def finalize(store: Store, run_id: str, inf: dict, code: int | None, act=None, w
                        run_id)
     inf.update(finished=now(), hours=hours, exit=code)
     _save(d, inf)
+    if inf.get("launch") == "colab":
+        _release_if_idle(store, run_id, inf)
     if rules.keep_here(store.comp):
         bring_home(store, run_id, inf)
     if act is None:
@@ -468,6 +480,24 @@ def _only_ours(store: Store, run_id: str, what: str):
     row = store.get_run(run_id)
     if not ours(store, row):
         raise KxError(f"{run_id} was launched from {row['writer']}: {what} it there", fix="kx sync shows how it ends")
+
+
+def _release_if_idle(store: Store, run_id: str, inf: dict) -> None:
+    """Delete the Colab runtime kx started for a host once its last run has ended and no job waits for it."""
+    from kx.remote import colab, mailbox
+    others = [r for r in running(store) if r["id"] != run_id and (json.loads((store.run_dir(r["id"]) / INFO).read_text())
+                                                                   .get("host") == inf["host"])]
+    if others:
+        return
+    h = _host(inf)
+    waiting = mailbox.rclone("lsf", "--dirs-only", mailbox.join(h.mailbox, "_hosts", h.name, "jobs"), check=False, timeout=120)
+    if waiting.returncode == 0 and waiting.stdout.strip():
+        return
+    try:
+        if colab.release(h):
+            print(f"kx: {h.name}: no more runs, Colab runtime released", file=sys.stderr)
+    except KxError as e:
+        print(f"kx: {h.name}: could not release the Colab runtime ({e}); kx remote release {h.name}", file=sys.stderr)
 
 
 def running(store: Store) -> list:

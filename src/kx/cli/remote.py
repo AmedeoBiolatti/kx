@@ -1,9 +1,11 @@
-"""Commands: remote list, add, check, setup, sync, follow, kill (runs on other machines; started with
+"""Commands: remote list, add, check, setup, login, launch, release, sync, follow, kill (runs on other machines; started with
 kx exec --on HOST)."""
 
 from __future__ import annotations
 
+import json
 import sys
+from pathlib import Path
 
 from kx.cli.common import Out, S
 from kx.ledger import config
@@ -124,9 +126,20 @@ def cmd_add(a):
 
 
 def cmd_setup(a):
-    from kx.remote import execute
+    from kx.remote import execute, hosts, mailbox
+    if a.notebook and hosts.get(a.host, _comp()).kind != "mailbox":  # before shipping anything
+        raise KxError(f"--notebook: {a.host} is not a mailbox host", fix=f"kind: mailbox, mailbox: gdrive:kx  (for {a.host})")
     r = execute.setup(a.host)
     env = r["env"]
+    if r.get("start") and a.notebook:
+        h = hosts.get(a.host, _comp())
+        path = Path(a.notebook).expanduser()
+        path.write_text(json.dumps(mailbox.notebook(h), indent=1) + "\n")
+        r["notebook"] = str(path)
+        return Out(r, f"the mailbox has kx and data {r['data_version'] or 'none'} for {r['host']}. Wrote {path}: open it "
+                      f"in Colab (File → Upload notebook), add the secret {mailbox.NOTEBOOK_SECRET} = the output of "
+                      f"`rclone config show {h.mailbox.split(':', 1)[0]}` here, pick a GPU runtime and run both cells; "
+                      f"then: kx remote check {r['host']}")
     if r.get("start"):  # a mailbox host: its agent sets each run up itself
         return Out(r, f"the mailbox has kx and data {r['data_version'] or 'none'} for {r['host']}. Start its agent there "
                       f"(it needs rclone with the same remote, and python3):\n  {r['start']}\n"
@@ -154,6 +167,37 @@ def cmd_follow(a):
     return Out({"run": run_id, "exit": code}, None, code)
 
 
+def _colab_host(name):
+    from kx.remote import hosts
+    h = hosts.get(name, _comp())
+    if h.launch != "colab":
+        raise KxError(f"{name} is not a host kx starts on Colab", fix=f"kind: mailbox, mailbox: gdrive:kx, launch: colab  (for {name})")
+    return h
+
+
+def cmd_login(a):
+    from kx.remote import colab
+    r = colab.login(_colab_host(a.host), show=lambda m: print(m, file=sys.stderr, flush=True))
+    return Out(r, f"signed in to Colab ({r['scope']}); token in {r['token_file']}. next: kx remote launch {a.host}, or "
+                  f"just kx exec --on {a.host} -- ...")
+
+
+def cmd_launch(a):
+    from kx.remote import colab, execute
+    h = _colab_host(a.host)
+    if _comp() is not None:
+        execute.setup(a.host)  # the kx sources (and data) the agent starts from, where missing or changed
+    r = colab.launch(h)
+    return Out(r, f"{a.host}: agent started on {r['runtime']} ({(r['spec'] or {}).get('accelerator', '?')}"
+                  f"{', new runtime' if r['created'] else ''}); kx remote check {a.host} shows it once it reports")
+
+
+def cmd_release(a):
+    from kx.remote import colab
+    gone = colab.release(_colab_host(a.host))
+    return Out({"host": a.host, "released": gone}, f"{a.host}: Colab runtime " + ("released" if gone else "was not running"))
+
+
 def cmd_kill(a):
     from kx.remote import execute
     r = execute.kill(a.run)
@@ -173,6 +217,13 @@ def register(cmd, group, action):
     s = action(g, "check", cmd_check, "can HOST run kx runs? (reach, tools, bubblewrap, disk, GPU; a mailbox's agent)")
     s.add_argument("host")
     s = action(g, "setup", cmd_setup, "get HOST ready before the first run: kx, the data, the environment")
+    s.add_argument("host")
+    s.add_argument("--notebook", metavar="PATH", help="a mailbox host: also write a Colab notebook (.ipynb) that runs its agent")
+    s = action(g, "login", cmd_login, "a host kx starts on Colab (launch: colab): sign in to the Colab API once")
+    s.add_argument("host")
+    s = action(g, "launch", cmd_launch, "a launch: colab host: get its Colab runtime and start its agent now")
+    s.add_argument("host")
+    s = action(g, "release", cmd_release, "a launch: colab host: delete its Colab runtime (runs on it are lost)")
     s.add_argument("host")
     s = action(g, "sync", cmd_sync, "copy remote runs back and record the ones that ended (one ended run: all its files)")
     s.add_argument("run", nargs="?")

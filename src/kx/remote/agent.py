@@ -65,7 +65,7 @@ class Agent:
 
     def lsf(self, path: str, *flags: str) -> list[str]:
         p = self.rclone("lsf", *flags, path, check=False)
-        return p.stdout.split() if p.returncode == 0 else []
+        return p.stdout.splitlines() if p.returncode == 0 else []  # one name per line: names may have spaces
 
     # -- runs on this machine ----------------------------------------------------------------------------------------
     def runs(self) -> dict[str, Path]:
@@ -165,10 +165,15 @@ class Agent:
     def ensure_data(self, slug: str, data: dict):
         dest = self.base / slug / "data" / data["version"]
         if data.get("needs"):  # what the run asked for besides Kaggle's files: copied when missing or changed
+            src = join(self.root, slug, "data", data["version"])
+            files = []  # rclone's --files-from takes files only (a directory brings nothing): a directory, as its files
+            for n in data["needs"]:
+                inside = self.lsf(join(src, n), "-R", "--files-only")
+                files += [f"{n}/{f}" for f in inside] if inside else [n]
             listing = self.base / slug / f".kx-needs-{os.getpid()}"
-            listing.write_text("\n".join(data["needs"]) + "\n")
+            listing.write_text("\n".join(files) + "\n")
             dest.mkdir(parents=True, exist_ok=True)
-            self.rclone("copy", join(self.root, slug, "data", data["version"]), str(dest), "--files-from", str(listing))
+            self.rclone("copy", src, str(dest), "--files-from", str(listing))
             listing.unlink()
         if (dest / ".kx-complete").exists():
             return
@@ -265,13 +270,20 @@ class Agent:
         self.tend()
         self.clean()
 
-    def loop(self):
+    def loop(self, idle_exit: float | None = None):
         log(f"{self.name}: taking runs from {self.box} every {self.every:g} s (Ctrl-C stops the agent, not its runs)")
+        last_busy = time.monotonic()
         while True:
             try:
                 self.once()
+                if self.runs():  # runs going on, or not yet copied up whole
+                    last_busy = time.monotonic()
             except Exception as e:  # noqa: BLE001 - a hiccup of the storage must not end the agent
                 log(f"error: {e}")
+                last_busy = time.monotonic()  # never leave over a hiccup
+            if idle_exit is not None and time.monotonic() - last_busy >= idle_exit:
+                log(f"no runs for {idle_exit:g} s: stopping (--idle-exit)")
+                return
             time.sleep(self.every)
 
 
@@ -284,6 +296,8 @@ def main(argv=None):
     p.add_argument("--max-runs", type=int, default=1, help="runs at once (more jobs wait their turn)")
     p.add_argument("--rclone-config", help="an rclone config file (default: rclone's own)")
     p.add_argument("--once", action="store_true", help="one round, then exit")
+    p.add_argument("--idle-exit", type=float, metavar="S", help="exit once no run has been going for S seconds "
+                   "(a machine kx started for its runs, such as a Colab runtime)")
     a = p.parse_args(argv)
     if shutil.which("rclone") is None:
         sys.exit("kx agent: rclone is not installed here (https://rclone.org/install/), or not on PATH")
@@ -291,7 +305,7 @@ def main(argv=None):
     base.mkdir(parents=True, exist_ok=True)
     agent = Agent(a.name, a.mailbox, base, a.every, a.max_runs, a.rclone_config)
     try:
-        agent.once() if a.once else agent.loop()
+        agent.once() if a.once else agent.loop(a.idle_exit)
     except KeyboardInterrupt:
         log("stopped; runs started go on, and the next agent here picks them up")
 

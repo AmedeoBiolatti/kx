@@ -99,7 +99,8 @@ def confine_lines(h, data_version: str | None) -> list[str]:
     return [
         "SBX=()",
         'if command -v bwrap >/dev/null && bwrap --ro-bind / / --dev-bind /dev /dev true 2>/dev/null; then',
-        '  SBX=(bwrap --die-with-parent --ro-bind / / --dev-bind /dev /dev --tmpfs /tmp --tmpfs "$HOME")',
+        # A fresh /proc: CUDA cannot initialize under the read-only bind of the host's (error 304)
+        '  SBX=(bwrap --die-with-parent --ro-bind / / --dev-bind /dev /dev --proc /proc --tmpfs /tmp --tmpfs "$HOME")',
         '  mkdir -p "$HOME/.cache"; SBX+=(--bind "$HOME/.cache" "$HOME/.cache")',
         '  [ -d "$HOME/.local/share/uv/python" ] && SBX+=(--ro-bind "$HOME/.local/share/uv/python" "$HOME/.local/share/uv/python")',
         *("  " + b for b in binds),
@@ -116,10 +117,16 @@ def env_lines(key: str, locked: bool, torch_version: str | None, torch: str | No
     sync = "uv sync " + ("--frozen " if locked else "") + "--all-extras --no-install-project --no-install-package kx"
     swap = []
     if torch:
-        spec = q(f"torch=={torch_version}" if torch_version else "torch")
-        why = q(f"no torch {torch_version or ''} build at {TORCH_INDEX}{torch}: pin a torch version that has one")
-        swap = [f'  uv pip install -q --python "$V/bin/python" --reinstall-package torch --index-url {q(TORCH_INDEX + torch)} '
-                f'--extra-index-url https://pypi.org/simple {spec} || {{ echo {why} >&2; finish 1; }}']
+        # That index's own build (+cu126), pinned: uv looks in --extra-index-url before --index-url, so with PyPI as the
+        # extra one it took PyPI's default build (+cu130 for torch 2.14) without a word. The index goes first, PyPI
+        # serves the rest, and a build from anywhere else fails the check below instead of running.
+        base = torch_version.split("+", 1)[0] if torch_version else None
+        spec = q(f"torch=={base}+{torch}" if base else "torch")
+        why = q(f"no torch {base or ''}+{torch} build at {TORCH_INDEX}{torch}: pin a torch version that has one")
+        check = q(f"import sys, torch; sys.exit(not torch.__version__.endswith('+{torch}'))")
+        swap = [f'  uv pip install -q --python "$V/bin/python" --reinstall-package torch --index-url https://pypi.org/simple '
+                f'--extra-index-url {q(TORCH_INDEX + torch)} {spec} || {{ echo {why} >&2; finish 1; }}',
+                f'  "$V/bin/python" -c {check} || {{ echo {q(f"the environment has no +{torch} torch build")} >&2; finish 1; }}']
     return [
         'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"',  # where the uv installer puts uv
         f'V="$B/venvs/{key}"; mkdir -p "$B/venvs"',

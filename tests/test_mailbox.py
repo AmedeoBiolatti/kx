@@ -127,6 +127,8 @@ def test_the_mailbox_carries_kaggle_files_and_only_needed_parts(agent, mbox, com
     for name in ("feat", "other"):
         (data / "derived" / name).mkdir(parents=True)
         (data / "derived" / name / "x.txt").write_text(name)
+    (data / "derived" / "feat" / "sub").mkdir()
+    (data / "derived" / "feat" / "sub" / "y.txt").write_text("deep")  # a directory goes whole, subfolders too
     (comp / "uses.py").write_text("import kx\nprint((kx.data_dir() / 'derived' / 'feat' / 'x.txt').read_text())\n")
     commit(comp, "uses")
     code = kx_main(["exec", "--json", "--on", "mb", "--needs", "derived/feat", "--", "python", "uses.py"])
@@ -136,6 +138,7 @@ def test_the_mailbox_carries_kaggle_files_and_only_needed_parts(agent, mbox, com
     assert (cloud / "train.csv").exists() and (cloud / "derived/feat/x.txt").exists() and not (cloud / "derived/other").exists()
     far = next((mbox / "demo" / "data").iterdir())
     assert (far / "derived/feat/x.txt").read_text() == "feat" and not (far / "derived/other").exists()
+    assert (cloud / "derived/feat/sub/y.txt").exists() and (far / "derived/feat/sub/y.txt").read_text() == "deep"
 
 
 def test_keep_here_clears_the_mailbox_and_the_agents_copy(agent, mbox, comp, capsys):
@@ -154,3 +157,23 @@ def test_keep_here_clears_the_mailbox_and_the_agents_copy(agent, mbox, comp, cap
             break
         time.sleep(0.1)
     assert not (mbox / "demo" / "runs" / out["run"]).exists() and not list(notes.iterdir())
+
+
+def test_setup_writes_a_colab_notebook_that_starts_the_agent(mbox, comp, capsys, tmp_path):
+    nb = tmp_path / "kx-mb.ipynb"
+    code, r = run_kx("remote", "setup", "mb", "--notebook", str(nb), capsys=capsys)
+    assert code == 0 and r["notebook"] == str(nb)
+    book = json.loads(nb.read_text())
+    assert book["nbformat"] == 4 and [c["cell_type"] for c in book["cells"]] == ["markdown", "code", "code"]
+    setup, start = ("".join(c["source"]) for c in book["cells"][1:])
+    compile(setup, "setup", "exec")  # valid Python; the Drive login comes from the secret, never the notebook
+    assert "userdata.get('KX_RCLONE_CONF')" in setup and "token" not in setup
+    assert start.startswith("!") and f"agent.py mb --mailbox fake:kx --dir {mbox}" in start
+    assert "kx.tar.gz" in start and "python3 -u " in start  # unbuffered: the log shows as it goes
+
+
+def test_notebook_is_only_for_mailbox_hosts(comp, capsys, tmp_path):
+    with open(comp / "comp.yaml", "a") as f:
+        f.write(f"hosts:\n  box: {{local: true, dir: {tmp_path / 'box'}}}\n")
+    code, r = run_kx("remote", "setup", "box", "--notebook", str(tmp_path / "x.ipynb"), capsys=capsys)
+    assert code != 0 and not (tmp_path / "x.ipynb").exists()
