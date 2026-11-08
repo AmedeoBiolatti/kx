@@ -1,7 +1,9 @@
-"""Commands: status, context, dashboard."""
+"""Commands: status, context, dashboard, nextcode panel."""
 
 from __future__ import annotations
 
+import argparse
+import json
 from pathlib import Path
 
 from kx.board import tasks
@@ -54,8 +56,14 @@ def cmd_context(a):
 
 def cmd_dashboard(a):
     from kx.views import dashboard
-    dashboard.serve(a.port, a.open)
+    dashboard.serve(a.port, a.open, a.dirs)
     return None
+
+
+def cmd_nextcode_panel(a):
+    from kx.views import nextcode
+    r = nextcode.main(a.invocation)
+    return Out(r, json.dumps(r, ensure_ascii=False, separators=(",", ":")))
 
 
 def register(cmd, group, action):
@@ -63,6 +71,12 @@ def register(cmd, group, action):
     s.add_argument("--all", action="store_true", help="every competition in the workspace")
     s = cmd("context", cmd_context, "what an agent needs before it starts (task, reference protocol, best runs, rules)")
     s.add_argument("--task", help="the task to describe (default: KX_TASK or the task branch)")
-    s = cmd("dashboard", cmd_dashboard, "local web page: status, runs, tasks, findings, submissions")
+    s = cmd("dashboard", cmd_dashboard, "local web page for every competition on this machine: status, runs, tasks, "
+            "findings, submissions")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--open", action="store_true", help="open it in the browser")
+    s.add_argument("dirs", nargs="*", metavar="DIR", help="folders to look in for competitions too (it finds the ones "
+                   "kx has used on this machine and the ones next to them by itself)")
+    g = group("nextcode", argparse.SUPPRESS)  # what the NextCode extension (nextcode/) runs
+    s = action(g, "panel", cmd_nextcode_panel, "the kx panel's response to one of its invocations")
+    s.add_argument("--invocation", help="the invocation, as JSON")

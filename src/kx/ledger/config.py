@@ -167,13 +167,16 @@ def load(start: Path | None = None) -> Comp:
     tags = raw.get("tags")
     if tags is not None and (not isinstance(tags, list) or not all(isinstance(t, str) for t in tags)):
         raise KxError(f"{path}: 'tags' must be a list of names")
-    return Comp(
+    comp = Comp(
         root=root, slug=slug, kind=kind, mode=mode, metric=str(metric.get("name", "score")), direction=direction,
         store=store, username=raw.get("username"), reference=raw.get("reference"), z=z,
         submission=_mapping(raw, "submission", path), budgets=budgets, workers=workers,
         max_workers=int(raw.get("max_workers", 2)), tags=[t.strip().lower() for t in tags or []], runs=runs,
         storage=storage,
     )
+    from kx.ledger import projects
+    projects.remember(comp.main_root)  # for the dashboard's list of this machine's competitions
+    return comp
 
 
 def workspace_of(comp: Comp) -> Path:

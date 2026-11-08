@@ -57,6 +57,9 @@ def own_hosts(tmp_path, monkeypatch):
     from kx import sandbox  # nor its machine role
     monkeypatch.setattr(sandbox, "MACHINE_FILE", tmp_path / "kx-config" / "machine.yaml")
     monkeypatch.delenv("KX_ROLE", raising=False)
+    from kx.ledger import projects  # nor its list of competitions
+    monkeypatch.setattr(projects, "FILE", tmp_path / "kx-cache" / "projects.json")
+    monkeypatch.setattr(projects, "_noted", set())
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-"""Run details must refresh while open and ignore obsolete async responses."""
+"""Run details must refresh while open, leave themselves alone when nothing changed, and ignore obsolete async responses."""
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,7 +14,7 @@ def test_live_run_drawer_refresh_and_navigation():
     script = r'''
 const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
 const page = fs.readFileSync(process.argv[1], 'utf8');
-new vm.Script(page.split('<script>')[1].split('</script>')[0]);
+new vm.Script(page.split('<script>').pop().split('</script>')[0]);
 const elements = new Map();
 function element(id) {
   if (!elements.has(id)) {
@@ -28,21 +28,30 @@ function element(id) {
   return elements.get(id);
 }
 let timer;
+const pushed = [];
 const context = vm.createContext({document: {getElementById: element, addEventListener() {}, hidden: false},
-  h: (...args) => args, history: {replaceState() {}}, COMP: 'fixture', TAB: 'runs',
+  h: (...args) => args, history: {replaceState() {}, pushState(_, __, u) { pushed.push(u); }, back() { pushed.push('back'); }},
+  location: {search: '', hash: ''}, COMP: 'fixture', TAB: 'runs', changes: 0, setOffline() {}, tickAgo() {},
   Date, Promise, lastLoad: Date.now(), load() {}, tickUpdated() {}, syncPicks() {}, setInterval: fn => timer = fn});
-vm.runInContext(page.slice(page.indexOf('const drawer ='), page.indexOf('async function showRun')), context);
-vm.runInContext(page.slice(page.lastIndexOf('setInterval(() =>'), page.indexOf('const deep =')), context);
+vm.runInContext(page.slice(page.indexOf('const drawer ='), page.indexOf('// -- a run\'s training telemetry')), context);
+vm.runInContext(page.slice(page.lastIndexOf('setInterval(() =>'), page.indexOf('// -- startup')), context);
 const flush = () => new Promise(resolve => setImmediate(resolve));
 (async () => {
-  let count = 0;
-  context.openDrawer(async () => ['sample-' + (++count)], 'run=r1', true);
+  let count = 0, fresh = true;  // fresh: the next build reads data that differs from the last
+  context.openDrawer(async () => { if (fresh) context.changes++; return ['sample-' + (++count)]; }, 'run=r1', true);
   await flush();
+  assert.deepEqual(pushed, ['?comp=fixture#runs/run=r1']);  // Back closes it
   const drawer = element('drawer'); drawer.scrollTop = 234;
   vm.runInContext('drawerState.updated=0', context);
   timer(); await flush();
   assert.equal(count, 2); assert.equal(drawer.children.at(-1), 'sample-2');
   assert.equal(drawer.scrollTop, 234);
+  fresh = false; vm.runInContext('drawerState.updated=0', context);
+  timer(); await flush();  // a timed refresh that read nothing new leaves the drawer as it was
+  assert.equal(count, 3); assert.equal(drawer.children.at(-1), 'sample-2');
+  context.refreshDrawer(); await flush();  // one asked for by hand draws again
+  assert.equal(drawer.children.at(-1), 'sample-4');
+  fresh = true;
   let finish;
   context.openDrawer(() => new Promise(resolve => finish = resolve), 'run=old', true);
   context.openDrawer(async () => ['new-run'], 'run=new', true);
@@ -50,7 +59,8 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(drawer.children.at(-1), 'new-run');
   let finishClosed;
   context.openDrawer(() => new Promise(resolve => finishClosed = resolve), 'run=closing', true);
-  context.closeDrawer(); finishClosed(['late']); await flush();
+  context.closeDrawer(true); finishClosed(['late']); await flush();
+  assert.equal(pushed.at(-1), 'back');  // closing by hand takes back the entry its opening added
   assert.equal(drawer.classList.contains('open'), false);
   assert.notEqual(drawer.children.at(-1), 'late');
   let finishPending, calls=0;
@@ -103,8 +113,9 @@ const pending = {};
 const render = tab => () => new Promise(resolve => (pending[tab] = resolve));
 const context = vm.createContext({
   document: {getElementById: id => id === 'main' ? main : {textContent: ''}, querySelectorAll: () => [], activeElement: null},
-  drawer: {classList: {contains: () => false}}, location: {hash: ''}, history: {replaceState() {}},
-  window: {scrollY: 0, scrollTo() {}}, COMP: 'c', TAB: 'status', Date, Promise, encodeURIComponent,
+  drawer: {classList: {contains: () => false}}, location: {hash: '', search: ''}, history: {replaceState() {}, pushState() {}},
+  window: {scrollY: 0, scrollTo() {}}, COMP: 'c', TAB: 'status', Date, Promise, encodeURIComponent, setTimeout, clearTimeout,
+  changes: 0, drawerState: null, setOffline() {}, pageUrl: (tab, deep) => `#${tab}${deep ? '/' + deep : ''}`,
   renderStatus: render('status'), renderRuns: render('runs'), renderTasks: render('tasks'), renderFindings: render('findings'),
   renderSubs: render('subs'), renderTraining: render('training'), errBox: e => e, dur: x => x, syncPicks() {}});
 vm.runInContext(page.slice(page.indexOf('const RENDER ='), page.indexOf('const tabs =')), context);
@@ -187,7 +198,7 @@ def test_chart_helpers_line_runs_up_pool_repeats_and_label_runs_once():
     script = r'''
 const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
 const page = fs.readFileSync(process.argv[1], 'utf8');
-const body = page.split('<script>')[1].split('</script>')[0];
+const body = page.split('<script>').pop().split('</script>')[0];
 function source(name) {  // a top-level function of the page, by its braces
   const at = body.indexOf(`function ${name}(`); let i = body.indexOf('{', body.indexOf(')', at)), depth = 0;
   for (; i < body.length; i++) { if (body[i] === '{') depth++; if (body[i] === '}' && --depth === 0) break; }

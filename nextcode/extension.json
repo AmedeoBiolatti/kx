@@ -1,0 +1,11 @@
+{
+  "id": "kx",
+  "name": "kx",
+  "version": "0.3.0",
+  "api_version": 3,
+  "module": "kx.wasm",
+  "commands": [],
+  "panels": [{"id": "kx", "title": "Dashboard", "placement": "editor"}],
+  "permissions": ["run-process"],
+  "processes": [{"program": "kx"}]
+}

@@ -47,7 +47,7 @@
   --shadow: none; --shadow-lg: 0 12px 32px rgba(0,0,0,0.5);
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }  /* a page that grows a scrollbar does not shift sideways */
 body { margin: 0; background: var(--page); color: var(--ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Inter, sans-serif; -webkit-font-smoothing: antialiased; }
 select, input, button { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -335,7 +335,28 @@ main.wide { max-width: none; }
 @media (max-width: 900px) { .ws { grid-template-columns: minmax(0, 1fr); } .ws-side { position: static; max-height: 380px; } }
 .icon-btn.mini { width: 22px; height: 22px; font-size: 12px; border-radius: 6px; }
 details.table-view summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 6px; width: max-content; }
+/* the server stopped answering: the page keeps what it showed and says so */
+.offline { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; background: var(--raised); border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 8px; box-shadow: var(--shadow-lg); padding: 8px 14px; font-size: 12.5px; }
+.offline[hidden] { display: none; }
+/* needs you: what it is about, as links; the fix, copyable */
+.need .refs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.need .refs .btn.small { padding: 0 7px; }
+.copy { font: 11px var(--mono); color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 5px; padding: 0 6px; margin-left: 4px; cursor: pointer; vertical-align: 1px; }
+.copy:hover { color: var(--accent-ink); border-color: var(--accent); }
+/* a run's config and metrics: one key a row, several columns of them */
+.kvgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); column-gap: 28px; }
+.kvgrid > div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--grid); min-width: 0; }
+.kvgrid .k { color: var(--ink-2); font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kvgrid .v { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.kvgrid .k { flex: none; max-width: 65%; }
+.kvlong > div { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 16px; padding: 4px 0; border-bottom: 1px solid var(--grid); }
+.kvlong .k { color: var(--ink-2); font: 12px var(--mono); }
+.kvlong .clamp { -webkit-line-clamp: 2; }
+.count-note { color: var(--muted); font-size: 12px; }
+.tag-btn { cursor: pointer; border: 1px solid transparent; }
+.tag-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
 </style>
+<script>try { const t = localStorage.getItem("kx-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { }  /* before the first paint: no flash of the other theme */</script>
 </head>
 <body>
 <header>
@@ -353,13 +374,14 @@ details.table-view summary { cursor: pointer; color: var(--muted); font-size: 12
 <main id="main"></main>
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true"></aside>
+<div class="offline" id="offline" role="status" hidden></div>
 <script>
 "use strict";
 const TOKEN = "__KX_TOKEN__";
 let COMP = new URLSearchParams(location.search).get("comp") || "__KX_DEFAULT__";
 const TABS = [["status", "Status"], ["training", "Training"], ["runs", "Runs"], ["tasks", "Tasks"], ["findings", "Findings"], ["subs", "Submissions"]];
 let TAB = (location.hash.slice(1).split("/")[0]) || "status";
-const state = { compare: [], runsQuery: "", runsProtocol: "", runsMode: "all", runsN: 300, runsSort: { key: "n", dir: -1 }, colsOpen: false, scatter: {}, tasksAll: false, tasksMode: "list", findAll: false, findTag: "", lbProtocol: "", histProtocol: "", metricQuery: "" };
+const state = { compare: [], runsQuery: "", runsProtocol: "", runsMode: (() => { try { return localStorage.getItem("kx-runs-mode") || "all"; } catch (e) { return "all"; } })(), runsStatus: "all", runsN: 300, runsSort: { key: "n", dir: -1 }, colsOpen: false, scatter: {}, taskQuery: "", findQuery: "", tasksAll: false, tasksMode: "list", findAll: false, findTag: "", lbProtocol: "", histProtocol: "", metricQuery: "" };
 
 // -- tiny DOM helpers (text always via textContent) -----------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -376,19 +398,41 @@ function h(tag, attrs, ...kids) {
 }
 const svgNS = "http://www.w3.org/2000/svg";
 function s(tag, attrs) { const el = document.createElementNS(svgNS, tag); for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v); return el; }
+// Every response is compared with the last one for the same request: `changes` counts those that differ, so a
+// timed refresh that read nothing new leaves the page as it is (an open table, a tooltip, a scrolled list stay).
+const lastBody = new Map();
+let changes = 0;
+const CLOCK = /"(age_s|reset_in_s|days_left)": -?[\d.e+-]+/g;
 function api(path, opts) {
-  const sep = path.includes("?") ? "&" : "?";
-  return fetch(`/api/${path}${sep}comp=${encodeURIComponent(COMP)}`, opts).then(async r => {
-    const d = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
-    if (!r.ok || (d && d.ok === false)) throw Object.assign(new Error(d.error || `HTTP ${r.status}`), { fix: d.fix });
+  const sep = path.includes("?") ? "&" : "?", url = `/api/${path}${sep}comp=${encodeURIComponent(COMP)}`;
+  return fetch(url, opts).catch(() => {
+    throw Object.assign(new Error("the kx dashboard server does not answer: was it stopped? (kx dashboard starts it)"), { offline: true });
+  }).then(async r => {
+    const text = await r.text();
+    let d; try { d = JSON.parse(text); } catch (e) { d = { ok: false, error: `HTTP ${r.status}` }; }
+    if (!r.ok || (d && d.ok === false)) throw Object.assign(new Error(d.error || `HTTP ${r.status}`), { fix: d.fix, status: r.status });
+    const sig = text.replace(CLOCK, "");  // seconds that tick by themselves are not news
+    if (!opts && lastBody.get(url) !== sig) { changes++; lastBody.set(url, sig); if (lastBody.size > 400) lastBody.delete(lastBody.keys().next().value); }
     return d;
   });
+}
+const offline = document.getElementById("offline");
+function setOffline(e) { offline.hidden = !e; if (e) offline.textContent = e.message + " · retrying"; }
+// "5m ago" that stays true: the ticker below rewrites every such label, so a page left as it is does not go stale
+function agoEl(ts, suffix = " ago") { return h("span", { class: "ago", "data-ts": ts || "", "data-suffix": suffix, title: ts ? new Date(ts).toLocaleString() : null }, ts ? ago(ts) + suffix : "–"); }
+function tickAgo() { for (const el of document.querySelectorAll(".ago[data-ts]")) if (el.dataset.ts) el.textContent = ago(el.dataset.ts) + el.dataset.suffix; }
+function copyBtn(text, label = "copy") {
+  return h("button", { class: "copy", title: `Copy: ${text}`, onclick: e => {
+    e.stopPropagation(); const b = e.currentTarget;
+    navigator.clipboard.writeText(text).then(() => { b.textContent = "copied"; setTimeout(() => { b.textContent = label; }, 1200); }, () => { b.textContent = "select it"; });
+  } }, label);
 }
 function fmt(v, d = 4) { if (v == null) return "–"; if (typeof v !== "number") return String(v); const a = Math.abs(v); if (a >= 1e5) return v.toLocaleString(undefined, { maximumFractionDigits: 0 }); return Number(v.toPrecision(d)).toString(); }
 function score(v, se) { return v == null ? "–" : fmt(v) + (se != null ? ` ±${fmt(se, 2)}` : ""); }
 function ago(ts) { if (!ts) return "–"; const s = (Date.now() - new Date(ts).getTime()) / 1000; return dur(s); }
 function dur(s) { if (s == null) return "–"; s = Math.max(0, s); if (s < 60) return `${s | 0}s`; if (s < 3600) return `${(s / 60) | 0}m`; if (s < 86400) return `${(s / 3600) | 0}h${String(((s % 3600) / 60) | 0).padStart(2, "0")}`; return `${(s / 86400) | 0}d${((s % 86400) / 3600) | 0}h`; }
 function compact(v) { const a = Math.abs(v); if (a >= 1e9) return fmt(v / 1e9, 3) + "B"; if (a >= 1e6) return fmt(v / 1e6, 3) + "M"; if (a >= 1e4) return fmt(v / 1e3, 3) + "K"; return fmt(v, 3); }
+function bytes(n) { if (n == null) return "–"; const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; } return `${i ? n.toFixed(n < 10 ? 1 : 0) : n} ${u[i]}`; }
 function rid(n) { return typeof n === "string" && isNaN(n) ? n : "r" + String(n).padStart(4, "0"); }  // a run id as is; a number (a chart axis) as r0012
 
 const RUN_KIND = { done: "good", failed: "critical", running: "active" };
@@ -420,19 +464,42 @@ function hi(a) { let m = -Infinity; for (const v of a) if (v > m) m = v; return 
 function niceTicks(lo, hi, n = 4) {
   if (lo === hi) { lo -= 1; hi += 1; }
   const step0 = (hi - lo) / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
-  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(st => st >= step0) || step0;
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(st => st >= step0 * 0.7) || step0;  // about n ticks, not as few as 1
   const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toPrecision(10));
   return out;
 }
-function intTicks(x0, x1, n) { return [...new Set(niceTicks(x0, x1, n).map(Math.round))].filter(v => v >= x0 && v <= x1); }  // runs: no r0074 twice
-function dayTicks(x0, x1, n) { const step = Math.max(1, Math.ceil((x1 - x0) / n)); const out = []; for (let v = Math.ceil(x0); v <= x1 + 1e-9; v += step) out.push(v); return out; }
+function intTicks(x0, x1, n) {  // whole numbers only: days, run numbers (a tick between two runs has no name)
+  const raw = Math.max(1, (x1 - x0) / n), mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = Math.max(1, [1, 2, 5, 10].map(m => m * mag).find(st => st >= raw * 0.7) || raw);
+  const out = []; for (let v = Math.ceil(x0 / step) * step; v <= x1 + 1e-9; v += step) out.push(Math.round(v)); return out;
+}
+const dayTicks = intTicks;
 function day(ts) { return new Date(ts).getTime() / 86400000; }
 function dayFmt(d) { return new Date(d * 86400000).toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
 function seriesKey(sr) { return sr.kind === "dots" ? h("i", { class: "key-dot", style: `background:${sr.color}` }) : h("i", { class: sr.dotted ? "key-line dotted" : "key-line", style: sr.dotted ? `border-color:${sr.color}` : `background:${sr.color}` }); }
-function nearestPoint(points, x) {  // within the series' own range only: a run that ended earlier has no value later
-  let best = null, lo = Infinity, hi = -Infinity;
-  for (const p of points) { lo = Math.min(lo, p[0]); hi = Math.max(hi, p[0]); if (!best || Math.abs(p[0] - x) < Math.abs(best[0] - x)) best = p; }
-  return x < lo || x > hi ? null : best;
+// The first index of sorted `a` (by key(a[i])) whose key is >= x: hover and lookups stay fast on long curves.
+function bisect(a, x, key = v => v) { let l = 0, r = a.length; while (l < r) { const m = (l + r) >> 1; if (key(a[m]) < x) l = m + 1; else r = m; } return l; }
+function nearestIn(sorted, x, key = v => v) {  // the element of sorted `a` closest to x
+  const i = bisect(sorted, x, key);
+  if (i <= 0) return sorted[0]; if (i >= sorted.length) return sorted[sorted.length - 1];
+  return x - key(sorted[i - 1]) <= key(sorted[i]) - x ? sorted[i - 1] : sorted[i];
+}
+function nearestPoint(sorted, x) {  // within the series' own range only: a run that ended earlier has no value later
+  if (!sorted.length || x < sorted[0][0] || x > sorted[sorted.length - 1][0]) return null;
+  return nearestIn(sorted, x, p => p[0]);
+}
+// At most about two points a pixel column: each column keeps its lowest and highest, in order, so spikes stay drawn.
+function thin(pts, X, maxPts) {
+  if (pts.length <= maxPts) return pts;
+  const out = []; let col = null, lo = null, hi = null;
+  const flush = () => { if (!lo) return; if (lo === hi) out.push(lo); else if (lo[0] <= hi[0]) out.push(lo, hi); else out.push(hi, lo); };
+  for (const p of pts) {
+    const c = Math.round(X(p[0]));
+    if (c !== col) { flush(); col = c; lo = hi = p; }
+    else { if (p[1] < lo[1]) lo = p; if (p[1] > hi[1]) hi = p; }
+  }
+  flush();
+  return out;
 }
 // Drag across a chart with a zoomKey to zoom into that x range (kept across refreshes, under that key); a double
 // click or the button goes back to all of it.
@@ -447,6 +514,8 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
   if (legend && keyed.length > 1) wrap.append(h("div", { class: "legend" }, keyed.map(sr => h("span", {}, seriesKey(sr), sr.name))));
   const yv = p => p.length > 2 ? `${yFmt(Math.min(p[1], p[2]))}–${yFmt(Math.max(p[1], p[2]))}` : yFmt(p[1]);
   const xs = all.map(p => p[0]), ys = [...all.flatMap(p => p.length > 2 ? [p[1], p[2]] : [p[1]]), ...refs.map(r => r.y)];
+  const sorted = new Map(series.map(sr => [sr, [...sr.points].sort((a, b) => a[0] - b[0])]));
+  const at = new Map(shown.map(sr => [sr, new Map(sr.points.map(p => [p[0], p]))]));  // x -> its point, per series
   const allUniq = [...new Set(shown.flatMap(sr => sr.points).map(p => p[0]))].sort((a, b) => a - b);
   let uniq = allUniq;
   const plot = h("div", { style: `position:relative;min-height:${height}px` });  // its height before it is drawn (next frame): a refresh does not move the page
@@ -457,7 +526,7 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
   function draw(W) {
   plot.replaceChildren();
   const H = height, m = { l: 52, r: 16, t: 10, b: 28 };
-  let x0 = lo(xs), x1 = hi(xs); if (x0 === x1) { x0 -= xPad; x1 += xPad; }
+  let x0 = lo(xs), x1 = hi(xs); const oneX = x0 === x1; if (oneX) { x0 -= xPad; x1 += xPad; }
   const z = zoomKey && zooms.get(zoomKey);
   let inView = ys;
   uniq = allUniq;
@@ -485,7 +554,8 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
     const tx = s("text", { x: m.l - 8, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }); tx.textContent = label; svg.append(tx);
   }
   svg.append(s("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)", "stroke-width": 1 }));
-  const xt = (xTicks || niceTicks)(x0, x1, Math.max(3, Math.min(6, Math.floor(W / 110)))).filter(v => v >= x0 && v <= x1 && !(xLabel && X(v) > W - m.r - 34));
+  let xt = oneX ? [xs[0]] : (xTicks || niceTicks)(x0, x1, Math.max(3, Math.min(6, Math.floor(W / 110)))).filter(v => v >= x0 && v <= x1 && !(xLabel && X(v) > W - m.r - 34));
+  xt = xt.filter((v, i) => !i || xFmt(v) !== xFmt(xt[i - 1]));  // ticks finer than the format can show: one label each
   const lastY = { right: -1e9, left: -1e9 };
   for (const r of [...refs].sort((a, b) => Y(a.y) - Y(b.y))) {  // top to bottom: label on the right, else on the left, else none
     svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(r.y), y2: Y(r.y), stroke: r.color || "var(--context)", "stroke-width": 1.5, "stroke-dasharray": "1.5 3.5", "stroke-linecap": "round" }));
@@ -502,7 +572,8 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
   const lines = s("g", { "clip-path": `url(#${clipId})` });
   svg.append(clip, lines);
   for (const sr of series) {
-    const pts = [...sr.points].sort((a, b) => a[0] - b[0]);
+    let pts = sorted.get(sr);
+    if (sr.kind !== "band" && sr.kind !== "dots") pts = thin(pts, X, 2 * W);
     if (sr.kind === "band") {  // points [x, edge, other]: shaded between the two, dotted along the edge
       lines.append(s("path", { d: "M" + [...pts.map(p => `${X(p[0])},${Y(p[2])}`), ...[...pts].reverse().map(p => `${X(p[0])},${Y(p[1])}`)].join("L") + "Z", fill: sr.color, "fill-opacity": 0.1, stroke: "none" }));
       lines.append(s("path", { d: "M" + pts.map(p => `${X(p[0])},${Y(p[1])}`).join("L"), fill: "none", stroke: sr.color, "stroke-width": 1.5, "stroke-dasharray": "1.5 3.5", "stroke-linecap": "round", opacity: 0.7 }));
@@ -537,13 +608,14 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
   const tip = h("div", { class: "tip", style: "display:none" });
   function show(clientX) {
     const r = svg.getBoundingClientRect(), vx = (clientX - r.left) / r.width * W;
-    let best = uniq[0]; for (const v of uniq) if (Math.abs(X(v) - vx) < Math.abs(X(best) - vx)) best = v;
+    const best = nearestIn(uniq, x0 + (vx - m.l) / (W - m.l - m.r) * (x1 - x0));
     cross.setAttribute("x1", X(best)); cross.setAttribute("x2", X(best)); cross.setAttribute("visibility", "visible");
     tip.replaceChildren();
     tip.append(h("div", { class: "t" }, tipTitle ? tipTitle(best) : `${xLabel || "x"} ${xFmt(best)}`));
     const rows = [];
     for (const sr of shown) {
-      const p = nearest ? nearestPoint(sr.points, best) : sr.points.find(q => q[0] === best) || (sr.kind === "step" ? [...sr.points].filter(q => q[0] <= best).pop() : null);
+      const ps = sorted.get(sr);
+      const p = nearest ? nearestPoint(ps, best) : at.get(sr).get(best) || (sr.kind === "step" ? ps[bisect(ps, best + 1e-12, q => q[0]) - 1] : null);
       if (p) rows.push([sr, p]);
     }
     if (nearest) rows.sort((a, b) => b[1][1] - a[1][1]);  // runs overlaid: highest first, so the order reads as a ranking
@@ -561,11 +633,13 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
   plot.append(svg, tip);
   if (z) plot.append(h("button", { class: "btn unzoom", title: "Show all of it (or double-click the chart)", onclick: () => { zooms.delete(zoomKey); draw(W); } }, "reset zoom"));
   }
-  const tv = h("details", { class: "table-view" }, h("summary", {}, "table"));
+  const tv = h("details", { class: "table-view", "data-open": title ? `table ${title}` : null }, h("summary", {}, "table"));  // stays open across refreshes
   tv.addEventListener("toggle", () => {
-    if (tv.open && tv.childElementCount === 1) tv.append(table([[xLabel || "x"], ...shown.map(sr => [sr.name, "num"])],
-      (() => { const at = shown.map(sr => new Map(sr.points.map(p => [p[0], p])));
-        return allUniq.map(x => [xFmt(x), ...at.map(m => { const p = m.get(x); return p ? yv(p) : ""; })]); })()));
+    if (!tv.open || tv.childElementCount !== 1) return;
+    const every = Math.ceil(allUniq.length / 500), rows = allUniq.filter((x, i) => i % every === 0 || i === allUniq.length - 1);  // a long curve: 500 rows of it
+    if (every > 1) tv.append(h("div", { class: "count-note" }, `every ${every}th of ${allUniq.length.toLocaleString()} points`));
+    tv.append(table([[xLabel || "x"], ...shown.map(sr => [sr.name, "num"])],
+      rows.map(x => [xFmt(x), ...shown.map(sr => { const p = at.get(sr).get(x); return p ? yv(p) : ""; })])));
   });
   wrap.append(tv);
   return wrap;
@@ -573,15 +647,21 @@ function lineChart({ series, height = 220, xFmt = fmt, yFmt = fmt, xLabel = "", 
 
 // -- drawer -----------------------------------------------------------------------------------------------------
 const drawer = document.getElementById("drawer"), scrim = document.getElementById("scrim");
-let drawerState = null;
-function dhead() { return h("div", { class: "dhead" }, h("button", { class: "icon-btn", onclick: closeDrawer, title: "Close (Esc)", "aria-label": "Close" }, "✕")); }
-async function refreshDrawer(state = drawerState) {
+let drawerState = null, drawerPushed = false;  // drawerPushed: opening it added a history entry, so Back (or closing it) leaves it
+function pageUrl(tab, deep) { return `?comp=${encodeURIComponent(COMP)}#${tab}${deep ? "/" + deep : ""}`; }
+function dhead() { return h("div", { class: "dhead" }, h("button", { class: "icon-btn", onclick: () => closeDrawer(true), title: "Close (Esc)", "aria-label": "Close" }, "✕")); }
+// auto: a timed refresh, which leaves the drawer as it is when its requests answered as before
+async function refreshDrawer(state = drawerState, auto = false) {
   if (!state || state !== drawerState) return;
-  if (state.loading) { state.again = true; return; }
+  if (state.loading) { state.again = true; state.againForced = state.againForced || !auto; return; }
   state.loading = true;
+  const before = changes;
   try {
     const nodes = await state.build();
     if (drawerState !== state) return;
+    setOffline(null);
+    if (auto && state.drawn && changes === before && Date.now() - state.drawn < 300000) return;  // a redraw every 5 min at most keeps countdowns true
+    state.drawn = Date.now();
     const scroll = drawer.scrollTop, f = document.activeElement;
     const keep = f && drawer.contains(f) && f.dataset.keep ? [f.dataset.keep, f.selectionStart, f.selectionEnd] : null;
     drawer.replaceChildren(dhead(), ...[nodes].flat(Infinity));
@@ -589,23 +669,44 @@ async function refreshDrawer(state = drawerState) {
     const again = keep && drawer.querySelector(`[data-keep="${keep[0]}"]`);  // typing in it while the run refreshes
     if (again) { again.focus({ preventScroll: true }); try { again.setSelectionRange(keep[1], keep[2]); } catch (e) { } }
   } catch (e) {
-    if (drawerState === state) drawer.replaceChildren(dhead(), errBox(e));
-  } finally { state.loading = false; state.updated = Date.now(); if (state.again) { state.again = false; refreshDrawer(state); } }
+    if (drawerState !== state) return;
+    if (e.offline && state.drawn) setOffline(e);  // the server is down: keep what it showed
+    else drawer.replaceChildren(dhead(), errBox(e));
+  } finally {
+    state.loading = false; state.updated = Date.now();
+    if (state.again) { const forced = state.againForced; state.again = state.againForced = false; refreshDrawer(state, !forced); }
+  }
 }
-function openDrawer(build, hash, live = false, wide = false) {
-  drawerState = { build, live, loading: false, updated: 0 };
+function openDrawer(build, hash, live = false, wide = false, push = true) {
+  const nested = !!drawerState;  // one drawer opened from another replaces it: Back closes both
+  drawerState = { build, hash, live, loading: false, updated: 0 };
   drawer.classList.toggle("wide", wide);
   drawer.replaceChildren(dhead(), h("div", { class: "empty" }, "loading…"));
   drawer.classList.add("open"); scrim.classList.add("open"); drawer.setAttribute("aria-hidden", "false");
-  if (hash) history.replaceState(null, "", `?comp=${encodeURIComponent(COMP)}#${TAB}/${hash}`);
+  if (hash) {
+    const u = pageUrl(TAB, hash);
+    if (push && !nested && location.search + location.hash !== u) { history.pushState(null, "", u); drawerPushed = true; }
+    else history.replaceState(null, "", u);
+  }
   refreshDrawer();
 }
-function closeDrawer() { syncPicks(); drawerState = null; drawer.classList.remove("open"); scrim.classList.remove("open"); drawer.setAttribute("aria-hidden", "true"); history.replaceState(null, "", `?comp=${encodeURIComponent(COMP)}#${TAB}`); }
-scrim.addEventListener("click", closeDrawer);
+// user: closed by hand (Esc, ✕, a click beside it), which takes back the history entry its opening added
+function closeDrawer(user = false) {
+  if (!drawerState && !drawer.classList.contains("open")) return;
+  syncPicks(); drawerState = null; drawer.classList.remove("open"); scrim.classList.remove("open"); drawer.setAttribute("aria-hidden", "true");
+  if (user && drawerPushed) { drawerPushed = false; history.back(); }
+  else { drawerPushed = false; history.replaceState(null, "", pageUrl(TAB)); }
+}
+scrim.addEventListener("click", () => closeDrawer(true));
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") closeDrawer();
-  const q = drawer.classList.contains("open") ? drawer.querySelector(".curves-bar input[type=search]") : main.querySelector(".curves-bar input[type=search]");
-  if (e.key === "/" && q && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) { e.preventDefault(); q.focus(); }  // / filters the charts
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+  if (e.key === "Escape" && drawer.classList.contains("open") && !document.getElementById("kmenu").open) return closeDrawer(true);
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "/") {  // / goes to the filter of what is shown (the drawer's, else the page's)
+    const q = (drawer.classList.contains("open") ? drawer : main).querySelector("input[type=search]");
+    if (q) { e.preventDefault(); q.focus(); q.select(); }
+  } else if (/^[1-9]$/.test(e.key) && TABS[+e.key - 1] && !drawer.classList.contains("open")) setTab(TABS[+e.key - 1][0]);  // 1-6: the tabs
+  else if (e.key === "r") drawer.classList.contains("open") ? refreshDrawer() : load();
 });
 function errBox(e) { return h("div", { class: "err-banner" }, h("strong", {}, "Error: "), e.message, e.fix ? h("div", { class: "cmd" }, "fix: " + e.fix) : null); }
 function kv(pairs) { return h("dl", { class: "kv" }, pairs.filter(([, v]) => v != null && v !== "").map(([k, v]) => [h("dt", {}, k), h("dd", {}, v)])); }
@@ -718,7 +819,8 @@ function curveCard(name, c, t0, prefs, rerender, height, an, x, run) {
       series.push({ name: label, points: pts.map((p, j) => [p[0], sm[j]]), color: latest ? "var(--series-1)" : "var(--context)", aside: !latest });
     } else series.push({ name: label, points: pts, color: latest ? "var(--series-1)" : "var(--context)", aside: !latest, thin: !latest });
   });
-  const change = c.first ? (c.last - c.first) / Math.abs(c.first) : null;
+  // a relative change only from a start that is not near zero (+6000% of a loss that began at 0.00003 says nothing)
+  const change = c.first && Math.abs(c.first) >= (c.max - c.min) * 0.1 ? (c.last - c.first) / Math.abs(c.first) : null;
   const sub = [`min ${fmt(c.min)} · max ${fmt(c.max)}`, change != null && Math.abs(change) >= 0.001 ? `${change > 0 ? "+" : ""}${(change * 100).toFixed(1)}% since start` : null,
     c.passes.length > 1 ? `${c.passes.length} passes (step restarts), latest bold` : null].filter(Boolean).join(" · ");
   return h("div", { class: "card" + (wide ? " wide" : "") },
@@ -811,7 +913,25 @@ async function fetchRun(ref) {
   return r;
 }
 const seenRuns = new Map();  // "comp run" -> its data when last shown, drawn at once when it opens again
-async function showRun(ref) {
+// A run's config: short values side by side in columns, long ones on a row of their own cut to two lines (a click
+// opens them); nested keys dotted.
+function configTable(config) {
+  const flat = Object.entries(flatten(config));
+  if (!flat.length) return h("div", { class: "empty" }, "{}");
+  const short = [], long = [];
+  for (const [k, v] of flat) (cellText(v).length > 40 ? long : short).push([k, v]);
+  return [h("div", { class: "kvgrid" }, short.map(([k, v]) => h("div", {}, h("span", { class: "k", title: k }, k), h("span", { class: "v" + (typeof v === "string" ? "" : " id"), title: cellText(v) }, cellText(v))))),
+    long.length ? h("div", { class: "kvlong" }, long.map(([k, v]) => {
+      const cell = h("div", { class: "clamp wrap", title: "Click to show all" }, cellText(v));
+      cell.addEventListener("click", () => cell.classList.toggle("clamp"));
+      return h("div", {}, h("span", { class: "k" }, k), cell);
+    })) : null];
+}
+function numberGrid(obj) {
+  return h("div", { class: "kvgrid" }, Object.entries(obj).map(([k, v]) => h("div", {}, h("span", { class: "k", title: k }, k),
+    h("span", { class: "v", title: typeof v === "number" ? String(v) : null }, typeof v === "number" ? fmt(v) : cellText(v)))));
+}
+async function showRun(ref, push = true) {
   const key = `${COMP} ${ref}`;
   let first = true;
   openDrawer(async () => {
@@ -828,8 +948,9 @@ async function showRun(ref) {
     const out = [h("h3", {}, `${r.run} `, badge(r.status, RUN_KIND[r.status]), host ? h("span", { class: "chip", title: "ran on this host" }, `@${host}`) : null,
       h("button", { class: "btn", style: "margin-left:auto;font-size:12.5px", title: "Its curves, scores and config next to other runs'", onclick: () => {
         if (!state.compare.includes(r.run)) setSelection(state.compare.length < CMP_MAX ? [...state.compare, r.run] : [...state.compare.slice(0, CMP_MAX - 1), r.run]);
-        showCompare(); } }, others ? `Compare with ${others} selected` : "Compare…")), hyp];
-    out.push(h("div", { class: "dim", style: "margin:6px 0 12px" }, `${r.kind} · by ${r.author || "–"} · ${ago(r.created)} ago`, r.task ? ` · ${r.task}` : ""));
+        showCompare(); } }, others ? `Compare with ${others} selected` : "Show in Training")), hyp];
+    out.push(h("div", { class: "dim", style: "margin:6px 0 12px" }, `${r.kind} · by ${r.author || "–"} · `, agoEl(r.created),
+      r.task ? [" · ", h("a", { class: "ext", href: "#", onclick: e => { e.preventDefault(); showTask(r.task); } }, r.task)] : "", " ", copyBtn(`kx show ${r.run}`)));
     const cur = curvesSection(r);
     const stats = runStats(r, cur.counters, cur.all);
     if (stats) out.push(stats);
@@ -846,23 +967,25 @@ async function showRun(ref) {
     }
     else out.push(details);
     if (r.notes && r.notes.length) out.push(h("h2", {}, "Notes"), r.notes.map(n => h("div", { class: "note" }, h("div", { class: "when" }, `${ago(n.ts)} ago · ${n.author || ""}`), h("div", { class: "wrap" }, n.text))));
-    if (r.config) out.push(h("h2", {}, "Config"), h("pre", {}, JSON.stringify(r.config, null, 2)));
-    if (r.metrics) out.push(h("h2", {}, "Metrics"), kv(Object.entries(r.metrics).map(([k, v]) => [k, fmt(v)])));
+    if (r.config && typeof r.config === "object") out.push(h("h2", {}, "Config", h("span", { class: "h2sub" }, `${Object.keys(flatten(r.config)).length} keys`)), configTable(r.config));
+    else if (r.config != null) out.push(h("h2", {}, "Config"), h("pre", {}, String(r.config)));
+    if (r.metrics && typeof r.metrics === "object" && Object.keys(r.metrics).length)
+      out.push(h("h2", {}, "Metrics", h("span", { class: "h2sub" }, "reported at the end (r.log)")), numberGrid(r.metrics));
     for (const o of (r.objects || []).filter(o => o.kind === "table" && o.preview)) {
       out.push(h("h2", {}, o.name, h("span", { class: "h2sub" }, `${o.metadata.rows ?? o.preview.rows.length} rows${o.preview.truncated ? " (first 100)" : ""}`)),
         h("div", { class: "card flush", style: "overflow-x:auto" }, table(o.preview.columns.map((c, j) => [c, o.preview.rows.every(row => row[j] == null || typeof row[j] === "number") ? "num" : ""]),
           o.preview.rows.map(row => row.map(c => typeof c === "number" ? fmt(c) : (c ?? ""))))));
     }
     const shown = new Set((r.objects || []).filter(o => o.kind === "table" && o.preview).map(o => o.path));  // tables above, not as files again
-    if (r.artifacts && r.artifacts.length) out.push(h("h2", {}, "Artifacts"), table([["file"], ["size", "num"]], r.artifacts.filter(a => !shown.has(a.path)).map(a => [h("span", { class: "id" }, a.path), a.bytes > 1e5 ? `${(a.bytes / 1e6).toFixed(1)} MB` : `${a.bytes} B`])));
+    if (r.artifacts && r.artifacts.length) out.push(h("h2", {}, "Artifacts"), table([["file"], ["size", "num"]], r.artifacts.filter(a => !shown.has(a.path)).map(a => [h("span", { class: "id" }, a.path), bytes(a.bytes)])));
     const left = (r.remote && r.remote.on_host) || [];  // big files kept on the host until someone fetches them
     if (left.length) out.push(h("h2", {}, `Still on ${r.remote.host}`, h("span", { class: "h2sub" }, "big files stay there until fetched")),
-      table([["file"], ["size", "num"]], left.map(a => [h("span", { class: "id" }, a.path), `${(a.bytes / 1e6).toFixed(0)} MB`])),
+      table([["file"], ["size", "num"]], left.map(a => [h("span", { class: "id" }, a.path), bytes(a.bytes)])),
       h("div", { class: "cmd", style: "margin-top:6px" }, `kx fetch ${r.run} ${left.length === 1 ? left[0].path : "[PATH ...]"}`));
     if (r.pushes && r.pushes.length) out.push(h("h2", {}, "On Kaggle"), table([["pushed"], ["what"], ["version", "num"], ["when", "num"]],
       r.pushes.map(p => [p.kind, p.url ? ext(p.url, p.target) : h("span", { class: "id" }, p.target), p.version ?? "", `${ago(p.created)} ago`])));
     return out;
-  }, `run=${ref}`, true, true);
+  }, `run=${ref}`, true, true, push);
 }
 
 // -- comparing runs: their curves overlaid, scores (with kx's paired test against a baseline), what differs ------------
@@ -993,7 +1116,9 @@ function compareCharts(vis, an, total) {
       return ks.map(k => compareCard(k, have[k].map(r => ({ run: r.run, c: an.get(r.run)[k], an: an.get(r.run), color: cmpColor(r.run), t0: t0[r.run], seed: seeds.get(r.run) })), vis.length, prefs, renderGrid, height, x)); };
     const groups = new Map();  // "train/loss" and "train_acc" in a section "train", collapsible
     const section = k => k.includes("/") ? k.slice(0, k.indexOf("/")) : ((k.match(/^(train|training|val|valid|validation|eval|test|dev)(?=[_.\-])/i) || [""])[0].toLowerCase());
-    for (const k of drawn) { const g = section(k); groups.set(g, [...(groups.get(g) || []), k]); }
+    const sizes = new Map(); for (const k of drawn) sizes.set(section(k), (sizes.get(section(k)) || 0) + 1);
+    for (const k of drawn) { const g = sizes.get(section(k)) > 1 ? section(k) : ""; groups.set(g, [...(groups.get(g) || []), k]); }  // a section of one chart is not worth a heading
+    if (groups.has("")) { const other = groups.get(""); groups.delete(""); groups.set("", other); }  // "other" last
     grid.className = groups.size > 1 ? "" : "curves";
     grid.replaceChildren(...(groups.size > 1 ? [...groups].map(([g, ks]) => {
       const sec = h("details", { class: "ws-sec", open: !ws.collapsed.has(g) || null }, h("summary", {}, g || "other", h("span", { class: "h2sub" }, `${ks.length}`)), h("div", { class: "curves" }, cards(ks)));
@@ -1014,7 +1139,7 @@ function compareCharts(vis, an, total) {
       oninput: e => { cmp.query = e.target.value; renderGrid(); },
       onkeydown: e => { if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = cmp.query = ""; renderGrid(); } } });
     box.replaceChildren(
-      h("h2", {}, "Training curves", h("span", { class: "h2sub" }, `${shared.length} logged by 2+ runs · ${names.length} in all`)),
+      h("h2", {}, "Training curves", h("span", { class: "h2sub" }, vis.length > 1 ? `${shared.length} logged by 2+ runs · ${names.length} in all` : `${names.length} logged by ${vis[0].run}`)),
       h("div", { class: "curves-bar" }, search,
         shared.length && shared.length < names.length ? seg(() => cmp.scope, v => { cmp.scope = v; }, [["shared", "In 2+ runs", "curves at least two of these runs log"], ["all", "Any run"]], "Which curves") : null,
         xPicker(xChoice(prefs, counters, anyTimes), counters, anyTimes, render),
@@ -1107,7 +1232,7 @@ function wsRow(r, { on, i = 0, n = 0, sim, full }) {
       h("div", { class: "ws-top" }, h("button", { class: "ws-id", title: "Open the run", onclick: stop(() => showRun(r.run)) }, r.run), runState(r),
         on && !i && n > 1 ? h("span", { class: "chip", title: "the others' scores and config are compared with it" }, "baseline") : null,
         r.score ? h("span", { class: "ws-score", title: "score under the reference protocol" }, fmt(r.score.value)) : null),
-      h("div", { class: "ws-meta" }, [`${ago(r.created)} ago`, t != null ? `${r.status === "running" ? "running for" : "ran"} ${dur(t)}` : null, r.host ? `@${r.host}` : null, r.task ? `${r.task}` : null, sim].filter(Boolean).join(" · ")),
+      h("div", { class: "ws-meta" }, agoEl(r.created), [t != null ? `${r.status === "running" ? "running for" : "ran"} ${dur(t)}` : null, r.host ? `@${r.host}` : null, r.task ? r.task : null, sim].filter(Boolean).map(x => " · " + x).join("")),
       r.hypothesis ? h("div", { class: "ws-hyp", title: r.hypothesis }, r.hypothesis) : null),
     on ? h("div", { class: "ws-acts" }, seedsOf(r).length && !full ? h("button", { class: "ws-mk", title: "Show the runs with the same kind, code and config as this one (the seed aside): its repeats",
         onclick: stop(() => { setSelection([...state.compare, ...seedsOf(r)]); cmpChanged(); }) }, `+${seedsOf(r).length} repeats`) : null,
@@ -1122,7 +1247,10 @@ async function renderTraining() {
     const latest = list.find(r => r.curves && r.curves.length);
     if (latest) setSelection([latest.run]);
   }
-  const [got, protos] = await Promise.all([Promise.all(state.compare.map(ref => cmpRun(ref).catch(e => ({ run: ref, missing: e.message })))),
+  const [got, protos] = await Promise.all([Promise.all(state.compare.map(ref => cmpRun(ref).catch(e => {
+    if (e.status === 400) return { run: ref, missing: e.message };  // no such run: it leaves the selection
+    throw e;  // the server is down or failed: the selection stays as it is
+  }))),
     cmp.protos || api("protocols").then(p => (cmp.protos = p)).catch(() => ({ reference: {} }))]);
   const missing = got.filter(r => r.missing), runs = got.filter(r => !r.missing);
   if (missing.length) setSelection(runs.map(r => r.run));
@@ -1177,28 +1305,32 @@ async function renderTraining() {
     missing.length ? h("div", { class: "err-banner" }, missing.map(m => `${m.run}: ${m.missing}`).join(" · ")) : null, body))];
 }
 
-async function showTask(id) {
+async function showTask(id, push = true) {
+  id = String(id);
   openDrawer(async () => {
     const t = await api(`task/${encodeURIComponent(id)}`);
     const out = [h("h3", {}, `${t.id} ${t.title}`), h("div", { style: "margin:6px 0 12px" }, badge(t.status + (t.result ? ` · ${t.result}` : ""), TASK_KIND[t.status]), h("span", { class: "dim" }, `  p${t.priority}${t.owner ? " · " + t.owner : ""}`))];
     out.push(kv([["waiting on", t.waiting_on], ["depends on", (t.depends || []).join(", ") || null], ["branch", t.branch], ["worktree", t.worktree ? h("span", { class: "cmd" }, t.worktree) : null]]));
     if (t.body) out.push(h("h2", {}, "Description"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.body));
     if (t.outcome) out.push(h("h2", {}, "Outcome"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.outcome));
-    if (t.notes && t.notes.length) out.push(h("h2", {}, "Progress notes"), t.notes.map(n => h("div", { class: "note" }, h("div", { class: "when" }, `${ago(n.ts)} ago · ${n.author || ""}`), h("div", { class: "wrap" }, n.text))));
+    if (t.notes && t.notes.length) out.push(h("h2", {}, "Progress notes", h("span", { class: "h2sub" }, `${t.notes.length}, newest first`)),
+      [...t.notes].sort((a, b) => String(b.ts).localeCompare(String(a.ts))).map(n => h("div", { class: "note" }, h("div", { class: "when" }, agoEl(n.ts), ` · ${n.author || ""}`), h("div", { class: "wrap", style: "white-space:pre-wrap" }, n.text))));
     if (t.runs && t.runs.length) out.push(h("h2", {}, "Runs"), table([["run"], ["status"], ["hypothesis"]], t.runs.map(r => [h("span", { class: "id" }, rid(r.id)), badge(r.status, RUN_KIND[r.status]), h("span", { class: "wrap" }, r.hypothesis || "")]), i => showRun(rid(t.runs[i].id))));
     if (t.findings && t.findings.length) out.push(h("h2", {}, "Findings"), t.findings.map(f => h("div", { class: "note wrap" }, h("strong", {}, `${f.id} `), h("span", { class: "chip" }, f.status), " ", f.text)));
     return out;
-  }, `task=${id}`);
+  }, `task=${id}`, false, false, push);
 }
 
-async function showSub(s) {
+async function showSub(id, push = true) {
+  id = String(typeof id === "object" ? id.id : id);
   openDrawer(async () => {
-    const out = [h("h3", {}, `${s.id} `, badge(s.status, SUB_KIND[s.status])), h("div", { class: "dim", style: "margin:6px 0 12px" }, `${s.run_id ? rid(s.run_id) : "external"} · ${ago(s.created)} ago · by ${s.actor || "–"}`)];
+    const s = await api(`sub/${encodeURIComponent(id)}`);
+    const out = [h("h3", {}, `${s.id} `, badge(s.status, SUB_KIND[s.status])), h("div", { class: "dim", style: "margin:6px 0 12px" },
+      s.run_id ? h("a", { class: "ext", href: "#", onclick: e => { e.preventDefault(); showRun(rid(s.run_id)); } }, rid(s.run_id)) : "external", " · ", agoEl(s.created), ` · by ${s.actor || "–"}`)];
     out.push(kv([["public", fmt(s.public)], ["private", s.private != null ? fmt(s.private) : null], ["message", s.message], ["why", s.why], ["expect", s.expect], ["error", s.error], ["target", s.target ? h("span", { class: "cmd" }, s.target) : null],
       ["on Kaggle", [ext(L().submissions, "submissions page"), kernelUrl(s.target) ? [" · ", ext(kernelUrl(s.target), "kernel")] : null]]]));
-    if (s.games) {
-      const r = await api(`sub/${s.id}`).catch(() => null);
-      const e = r && r.games ? { ...r.games, history: r.history } : null;
+    {
+      const e = s.games ? { ...s.games, history: s.history } : null;
       if (e) {
         out.push(h("h2", {}, "Games"), kv([["played", e.games], ["record", `${e.win} won · ${e.loss} lost · ${e.tie} tied`], ["win rate", e.winrate != null ? `${(e.winrate * 100).toFixed(1)}% ±${(e.se * 100).toFixed(1)}` : null]]));
         if (e.history && e.history.filter(p => p.episodes != null).length > 1) {
@@ -1209,12 +1341,19 @@ async function showSub(s) {
       }
     }
     return out;
-  }, `sub=${s.id}`);
+  }, `sub=${id}`, false, false, push);
 }
 
 // -- tabs -------------------------------------------------------------------------------------------------------
 const NEED_KIND = { dead_run: ["critical", "×"], uncertain_submission: ["warning", "?"], failed_submission: ["critical", "×"], resume_task: ["good", "→"],
-  task_waits_on_you: ["warning", "!"], worker_failed: ["critical", "×"], unmerged_task: ["neutral", "⇢"], sync: ["neutral", "↻"], no_reference: ["neutral", "i"], budget: ["warning", "$"] };
+  task_waits_on_you: ["warning", "!"], worker_failed: ["critical", "×"], unmerged_task: ["neutral", "⇢"], sync: ["neutral", "↻"], no_reference: ["neutral", "i"], budget: ["warning", "$"],
+  remote_run: ["warning", "@"], stale_task: ["warning", "z"], finding_evidence: ["warning", "F"], protocol_churn: ["neutral", "≠"], storage: ["warning", "▣"] };
+// What a needs-you item is about, opened in place: a run, task or submission in the drawer, a finding in Findings.
+function refAction(ref) {
+  const m = /^([rTSF])(\d+)$/.exec(ref || "");
+  if (!m) return null;
+  return { r: () => showRun(ref), T: () => showTask(m[2]), S: () => showSub(m[2]), F: () => { state.findQuery = ref; state.findAll = true; setTab("findings"); } }[m[1]];
+}
 const TINT = { warning: ["var(--warn-soft)", "var(--warn-ink)"], critical: ["var(--crit-soft)", "var(--crit-ink)"], good: ["var(--good-soft)", "var(--good-ink)"], neutral: ["var(--chip)", "var(--ink-2)"] };
 function setCount(tab, n) {
   const b = document.querySelector(`#tabs button[data-tab="${tab}"]`); if (!b) return;
@@ -1222,7 +1361,9 @@ function setCount(tab, n) {
 }
 
 async function renderStatus() {
-  const [st, hist, lbd] = await Promise.all([api("status"), api("history" + (state.histProtocol ? `?protocol=${encodeURIComponent(state.histProtocol)}` : "")), api("leaderboard" + (state.lbProtocol ? `?protocol=${encodeURIComponent(state.lbProtocol)}` : "")).catch(() => null)]);
+  const [st, hist, lbd] = await Promise.all([api("status"),
+    api("history" + (state.histProtocol ? `?protocol=${encodeURIComponent(state.histProtocol)}` : "")).catch(e => { if (e.offline) throw e; return { protocol: null, protocols: [], points: [] }; }),
+    api("leaderboard" + (state.lbProtocol ? `?protocol=${encodeURIComponent(state.lbProtocol)}` : "")).catch(e => { if (e.offline) throw e; return null; })]);
   const out = [];
   setCount("status", st.needs_you.length);
   if (st.needs_you.length) {
@@ -1232,8 +1373,12 @@ async function renderStatus() {
       const [kind, sym] = NEED_KIND[n.kind] || ["neutral", "·"];
       const [bg, fg] = TINT[kind];
       const acts = h("div", { class: "actions" });
-      needs.append(h("div", { class: "need" }, h("span", { class: "icon", style: `background:${bg};color:${fg}`, "aria-hidden": "true" }, sym),
-        h("div", { class: "what wrap" }, n.what, n.age_s != null ? h("span", { class: "dim" }, ` · ${dur(n.age_s)}`) : null, h("code", {}, n.fix)), acts));
+      const refs = (n.refs || (n.ref ? [n.ref] : [])).filter(refAction);
+      needs.append(h("div", { class: "need" }, h("span", { class: "icon", style: `background:${bg};color:${fg}`, "aria-hidden": "true", title: n.kind.replaceAll("_", " ") }, sym),
+        h("div", { class: "what wrap" }, n.what, n.age_s != null ? h("span", { class: "dim" }, ` · ${dur(n.age_s)}`) : null,
+          n.fix ? [h("code", {}, n.fix), copyBtn(n.fix)] : null,
+          refs.length ? h("div", { class: "refs" }, refs.slice(0, 16).map(r => h("button", { class: "btn small", title: `Open ${r}`, onclick: refAction(r) }, r)),
+            refs.length > 16 ? h("span", { class: "dim" }, `+${refs.length - 16}`) : null) : null), acts));
     }
     out.push(needs);
   } else {
@@ -1243,8 +1388,10 @@ async function renderStatus() {
   const res = st.results, ref = res.reference, best = res.best[0];
   const sub = st.submissions, sl = sub.slots, lb = sub.lb;
   const runs = st.running.runs, workers = st.running.workers;
+  const maxi = ((st.competition || {}).direction || "max") !== "min";
   const pub = sub.recent.filter(x => x.public != null).map(x => x.public);
-  const bestPub = pub.length ? Math.max(...pub) : null;
+  const bestPub = pub.length ? (maxi ? Math.max(...pub) : Math.min(...pub)) : null;
+  const lbScore = lb && lb.our_score != null ? lb.our_score : bestPub;  // the score our rank is for (a rating moves: not always our best)
   const prevBest = hist.protocol === ref.id && hist.points.length > 1 ? hist.points[hist.points.length - 2].best : null;
   const gain = best && prevBest != null && best.value !== prevBest ? best.value - prevBest : null;
   const stat = (cls, label, value, small, subtext, url) => h("div", { class: `stat ${cls}` }, h("div", { class: "label" }, url ? ext(url, label, `${label} on Kaggle`) : label),
@@ -1252,8 +1399,8 @@ async function renderStatus() {
   out.push(h("div", { class: "card stats" },
     stat("hero", "Best local score", best ? fmt(best.value) : "–", best && best.se != null ? `±${fmt(best.se, 2)}` : null,
       best ? [h("span", { class: "id" }, best.run), gain != null ? ` · +${fmt(gain, 2)} vs previous best` : "", ` · ${ref.id}`] : (ref.id || "no scored runs yet")),
-    stat("", "Public leaderboard", bestPub != null ? fmt(bestPub, 3) : "–", lb && lb.our_rank ? `#${lb.our_rank}` : null,
-      lb ? `of ${lb.n_teams.toLocaleString()} teams${lb.bronze != null ? ` · bronze ${fmt(lb.bronze, 3)}` : ""} · ${ago(lb.ts)} ago` : "kx sync to fetch", L().leaderboard),
+    stat("", "Public leaderboard", lbScore != null ? fmt(lbScore, 3) : "–", lb && lb.our_rank ? `#${lb.our_rank}` : null,
+      lb ? `of ${lb.n_teams.toLocaleString()} teams${bestPub != null && lbScore !== bestPub ? ` · best sub ${fmt(bestPub, 3)}` : ""}${lb.bronze != null ? ` · bronze ${fmt(lb.bronze, 3)}` : ""} · synced ${ago(lb.ts)} ago` : "kx sync to fetch", L().leaderboard),
     stat("", "Submissions today", String(sl.used), sl.limit ? `of ${sl.limit}` : null,
       `resets in ${dur(sl.reset_in_s)}`, L().submissions),
     stat("", "Running now", String(runs.length + workers.length), runs.length + workers.length === 1 ? "process" : "processes",
@@ -1284,8 +1431,9 @@ async function renderStatus() {
   }
   left.push(h("h2", {}, "Latest submissions", h("span", { class: "h2sub" }, ext(L().submissions, "on Kaggle", "Your submissions on Kaggle"))));
   left.push(h("div", { class: "card flush" }, sub.recent.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "num"], [""]],
-    sub.recent.map(x => [h("span", { class: "id" }, x.id), x.run ? h("span", { class: "id" }, x.run) : h("span", { class: "dim" }, "external"), badge(x.status, SUB_KIND[x.status]), fmt(x.public), `${ago(x.created)} ago`,
-      x.winrate != null ? h("span", { class: "dim" }, `${x.decided} games · ${(x.winrate * 100).toFixed(1)}% won`) : (x.error ? h("span", { class: "dim clamp" }, x.error) : "")])) : h("div", { class: "empty" }, "No submissions yet.")));
+    sub.recent.map(x => [h("span", { class: "id" }, x.id), x.run ? h("span", { class: "id" }, x.run) : h("span", { class: "dim" }, "external"), badge(x.status, SUB_KIND[x.status]), fmt(x.public), agoEl(x.created),
+      x.winrate != null ? h("span", { class: "dim" }, `${x.decided} games · ${(x.winrate * 100).toFixed(1)}% won`) : (x.error ? h("span", { class: "dim clamp" }, x.error) : "")]),
+    i => showSub(sub.recent[i].id)) : h("div", { class: "empty" }, "No submissions yet.")));
 
   const tl = [...st.tasks.active, ...st.tasks.ready];
   right.push(h("h2", {}, "Tasks", h("span", { class: "h2sub" }, `${st.tasks.counts.active} active · ${st.tasks.counts.waiting} waiting · ${st.tasks.counts.open} open`)));
@@ -1478,35 +1626,66 @@ function runsScatter(rows, keys, picked) {  // any two numbers of the runs again
       : h("div", { class: "empty" }, "No run has both numbers."));
 }
 
+
+// A list's filter: every word (spaces) must appear in a row's text; -word leaves out rows that have it.
+function wordsMatch(text, query) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return words.every(w => w.startsWith("-") && w.length > 1 ? !text.includes(w.slice(1)) : text.includes(w));
+}
+// A search box over rows already drawn: hides the ones that do not match and says how many are left.
+function rowFilter({ key, placeholder, texts, rows, count, total }) {
+  const apply = () => {
+    let n = 0;
+    rows().forEach((el, i) => { const hit = wordsMatch(texts[i], state[key]); el.style.display = hit ? "" : "none"; n += hit; });
+    if (count) count.textContent = state[key] ? `${n} of ${total ?? texts.length}` : `${total ?? texts.length}`;
+  };
+  const input = h("input", { type: "search", placeholder, value: state[key], "data-keep": key, "aria-label": placeholder, title: "Words that must all appear; -word leaves out what has it. / jumps here.",
+    oninput: e => { state[key] = e.target.value; apply(); },
+    onkeydown: e => { if (e.key === "Escape" && e.target.value) { e.stopPropagation(); e.target.value = state[key] = ""; apply(); } } });
+  return { input, apply };
+}
+let protosCache = null;  // the protocol list changes rarely: read at most once a minute
+async function protocolList() {
+  if (!protosCache || protosCache.comp !== COMP || Date.now() - protosCache.at > 60000) protosCache = { comp: COMP, at: Date.now(), d: await api("protocols") };
+  return protosCache.d;
+}
+
 async function renderRuns() {
-  const protos = await api("protocols");
-  const sel = h("select", { "aria-label": "Protocol", onchange: e => { state.runsProtocol = e.target.value; load(); } },
-    h("option", { value: "" }, `reference: ${protos.reference.id || "none"}`),
-    protos.protocols.filter(p => !p.reference && !p.id.startsWith("kaggle:")).map(p => h("option", { value: p.id, selected: state.runsProtocol === p.id ? true : null }, `${p.id} (${p.scores})`)));
   const mode = h("div", { class: "seg", role: "group", "aria-label": "View" },
-    [["board", "Ranked"], ["all", "All runs"]].map(([v, label]) => h("button", { "aria-pressed": state.runsMode === v ? "true" : "false", onclick: () => { state.runsMode = v; load(); } }, label)));
-  const q = h("input", { type: "search", placeholder: "filter (hypothesis, run, task, curve)", value: state.runsQuery, oninput: e => { state.runsQuery = e.target.value; filterRows(); } });
+    [["board", "Ranked", "runs scored under a protocol, best first"], ["all", "All runs", "every run, newest first: its config and metrics as columns"]].map(([v, label, title]) => h("button", { "aria-pressed": state.runsMode === v ? "true" : "false", title,
+      onclick: () => { state.runsMode = v; try { localStorage.setItem("kx-runs-mode", v); } catch (e) { } load(); } }, label)));
   const bar = h("div", { class: "cmp-bar" });
   paintSel = note => {
     const n = state.compare.length;
-    bar.replaceChildren(...(n ? [h("span", { class: "dim" }, note || `${n} selected`), h("button", { class: "btn primary", onclick: showCompare }, n > 1 ? `Compare ${n} runs` : "Compare…"),
+    bar.replaceChildren(...(n ? [h("span", { class: "dim" }, note || `${n} selected`), h("button", { class: "btn primary", onclick: showCompare }, n > 1 ? `Compare ${n} runs` : "Show in Training"),
       h("button", { class: "btn", onclick: () => { setSelection([]); syncPicks(); } }, "Clear")] : [h("span", { class: "dim" }, "tick runs to compare them")]));
   };
   paintSel();
-  const out = [h("div", { class: "filters" }, mode, state.runsMode === "board" ? sel : null, q, bar)];
-  const box = h("div", { class: "card flush" });
-  let rows = [], cells = [], ids = [];
+  const box = h("div", { class: "card flush" }), count = h("span", { class: "count-note" });
+  const out = [];
+  let rows = [], extra = null, sel = null, statusSeg = null, picker = null, total = null;
   if (state.runsMode === "board") {
-    const b = await api("board" + (state.runsProtocol ? `?protocol=${encodeURIComponent(state.runsProtocol)}` : ""));
+    const [protos, b] = await Promise.all([protocolList(), api("board" + (state.runsProtocol ? `?protocol=${encodeURIComponent(state.runsProtocol)}` : ""))]);
+    sel = h("select", { "aria-label": "Protocol", onchange: e => { state.runsProtocol = e.target.value; load(); } },
+      h("option", { value: "" }, `reference: ${protos.reference.id || "none"}`),
+      protos.protocols.filter(p => !p.reference && !p.id.startsWith("kaggle:")).map(p => h("option", { value: p.id, selected: state.runsProtocol === p.id ? true : null }, `${p.id} (${p.scores})`)));
     rows = b.rows;
     box.append(h("div", { class: "dim", style: "padding:8px 10px 2px" }, h("span", { class: "id dim" }, b.protocol), " · “vs #1” is a paired test on the per-fold breakdown"));
-    cells = rows.map(r => [pickBox(r.run), h("span", { class: "rank" }, r.rank), h("span", { class: "id" }, r.run), score(r.value, r.se), r.n ?? "", verdict(r.vs_best),
-      r.task ? h("span", { class: "id" }, `${r.task}`) : "", h("span", { title: r.hypothesis || "" }, r.hypothesis || "")]);
-    ids = rows.map(r => r.run);
-    box.append(table([["", "sel"], ["#", "num"], ["run"], ["score", "num"], ["n", "num"], ["vs #1"], ["task"], ["hypothesis", "one"]], cells, i => showRun(ids[i])));
+    box.append(rows.length ? table([["", "sel"], ["#", "num"], ["run"], ["score", "num"], ["n", "num"], ["vs #1"], ["task"], ["hypothesis", "one"]],
+      rows.map(r => [pickBox(r.run), h("span", { class: "rank" }, r.rank), h("span", { class: "id" }, r.run), score(r.value, r.se), r.n ?? "", verdict(r.vs_best),
+        r.task ? h("span", { class: "id" }, r.task) : "", h("span", { title: r.hypothesis || "" }, r.hypothesis || "")]), i => showRun(rows[i].run))
+      : h("div", { class: "empty", style: "padding:10px" }, "No run is scored under this protocol yet: All runs shows every run."));
+    if (rows.length < 3) extra = h("div", { class: "count-note", style: "margin-top:6px" }, "Few runs are ranked here: ",
+      h("a", { class: "ext", href: "#", onclick: e => { e.preventDefault(); state.runsMode = "all"; load(); } }, "see all runs"), ".");
   } else {
-    rows = await api(`runs?n=${state.runsN}&curves=1&config=1`);
-    for (const r of rows) r.flat = flatten(r.config || {});
+    const all = await api(`runs?n=${state.runsN}&curves=1&config=1`);
+    for (const r of all) r.flat = flatten(r.config || {});
+    const counts = { all: all.length, running: 0, done: 0, failed: 0 };
+    for (const r of all) if (r.status in counts) counts[r.status]++;
+    if (state.runsStatus !== "all" && !counts[state.runsStatus]) state.runsStatus = "all";
+    rows = all.filter(r => state.runsStatus === "all" || r.status === state.runsStatus);
+    statusSeg = h("div", { class: "seg", role: "group", "aria-label": "Status" }, [["all", `All ${counts.all}`], ...["running", "done", "failed"].filter(k => counts[k]).map(k => [k, `${k[0].toUpperCase() + k.slice(1)} ${counts[k]}`])]
+      .map(([v, label]) => h("button", { "aria-pressed": state.runsStatus === v ? "true" : "false", onclick: () => { state.runsStatus = v; load(); } }, label)));
     const took = r => r.status === "running" ? dur((Date.now() - new Date(r.created)) / 1000) : (r.finished ? dur((new Date(r.finished) - new Date(r.created)) / 1000) : "");
     const status = r => {
       const p = r.progress;
@@ -1514,36 +1693,29 @@ async function renderRuns() {
       return h("div", { class: "rprog", title: `${p.phase}${p.eta_s ? " · eta " + dur(p.eta_s) : ""}` }, badge(`${p.percent.toFixed(0)}%`, RUN_KIND[r.status]),
         h("div", { class: "progress" }, h("div", { style: `width:${p.percent}%` })), p.eta_s ? h("span", { class: "dim" }, dur(p.eta_s)) : null);
     };
-    const keys = runKeys(rows), picked = pickedCols(keys);
+    const keys = runKeys(all), picked = pickedCols(keys);
     const base = [[["", "sel"], r => pickBox(r.run)], [["run"], r => h("span", { class: "id" }, r.run, r.host ? h("span", { class: "dim" }, ` @${r.host}`) : ""), "n"],
-      [["status"], status, "status"], [["started"], r => ago(r.created), "created"], [["took", "num"], took, "took"], [["kind"], r => h("span", { class: "dim" }, r.kind), "kind"], [["by"], r => r.author || "", "author"],
-      [["task"], r => r.task ? h("span", { class: "id" }, `${r.task}`) : "", "task"],
-      [["score", "num"], r => r.score ? score(r.score.value, r.score.se) : (r.other_score ? h("span", { class: "dim" }, `${fmt(r.other_score.value)} · ${r.other_score.protocol_id.split("@")[0]}`) : ""), "score"]];
-    const extra = picked.map(k => [[keyLabel(k), "num"], r => cellText(colValue(r, k)), k]);
-    const used = [...base.filter(([[name], f]) => !["task", "score", "kind", "by"].includes(name) || rows.some(r => { const v = f(r); return v !== "" && !(name === "kind" && r.kind === rows[0].kind) && !(name === "by" && r.author === rows[0].author); })),
-      ...extra, [["hypothesis", "one"], r => h("span", { title: r.hypothesis || "" }, r.hypothesis || ""), "hypothesis"]];
+      [["status"], status, "status"], [["started", "nowrap"], r => agoEl(r.created), "created"], [["took", "num"], took, "took"], [["kind"], r => h("span", { class: "dim" }, r.kind), "kind"], [["by"], r => r.author || "", "author"],
+      [["task"], r => r.task ? h("span", { class: "id" }, r.task) : "", "task"],
+      [["score", "num"], r => r.score ? score(r.score.value, r.score.se) : (r.other_score ? h("span", { class: "dim", title: r.other_score.protocol_id }, `${fmt(r.other_score.value)} · ${r.other_score.protocol_id.split("@")[0]}`) : ""), "score"]];
+    const cols = picked.map(k => [[keyLabel(k), "num"], r => cellText(colValue(r, k)), k]);
+    const used = [...base.filter(([[name], f]) => !["task", "score", "kind", "by"].includes(name) || all.some(r => { const v = f(r); return v !== "" && !(name === "kind" && r.kind === all[0].kind) && !(name === "by" && r.author === all[0].author); })),
+      ...cols, [["hypothesis", "one"], r => h("span", { title: r.hypothesis || "" }, r.hypothesis || ""), "hypothesis"]];
     const srt = state.runsSort;
     sortRuns(rows, srt.key, srt.dir);
-    cells = rows.map(r => used.map(([, f]) => f(r)));
-    ids = rows.map(r => r.run);
     const head = used.map(([[label, cls], , key]) => [key ? h("button", { class: "sort", title: `Sort by ${label}`, "data-dir": srt.key === key ? (srt.dir < 0 ? "↓" : "↑") : null,
       onclick: () => { state.runsSort = { key, dir: srt.key === key ? -srt.dir : -1 }; load(); } }, label) : label, cls]);
-    out[0].append(colPicker(keys, picked));
+    picker = colPicker(keys, picked);
     const plot = runsScatter(rows, keys, picked);
     if (plot) out.push(plot);
-    box.append(table(head, cells, i => showRun(ids[i])));
-    if (rows.length >= state.runsN) box.append(h("div", { style: "padding:8px 10px" }, h("button", { class: "btn", onclick: () => { state.runsN += LIST_PAGE; load(); } }, `${LIST_PAGE} older runs`)));
+    box.append(rows.length ? table(head, rows.map(r => used.map(([, f]) => f(r))), i => showRun(rows[i].run)) : h("div", { class: "empty", style: "padding:10px" }, "No runs yet."));
+    if (all.length >= state.runsN) box.append(h("div", { style: "padding:8px 10px" }, h("button", { class: "btn", onclick: () => { state.runsN += LIST_PAGE; load(); } }, `${LIST_PAGE} older runs`)));
+    total = rows.length;
   }
-  function filterRows() {
-    const needle = state.runsQuery.toLowerCase();
-    box.querySelectorAll("tbody tr").forEach((tr, i) => {
-      const r = rows[i]; const text = `${r.run} ${r.hypothesis || ""} ${r.task ? r.task : ""} ${(r.curves || []).join(" ")}`.toLowerCase();
-      tr.style.display = !needle || text.includes(needle) ? "" : "none";
-    });
-  }
-  out.push(box);
-  setTimeout(filterRows);
-  return out;
+  const texts = rows.map(r => `${r.run} ${r.hypothesis || ""} ${r.task || ""} ${r.status || ""} ${r.kind || ""} ${r.author || ""} ${r.host ? "@" + r.host : ""} ${(r.curves || []).join(" ")}`.toLowerCase());
+  const f = rowFilter({ key: "runsQuery", placeholder: "filter runs: id, words, T12, @host, a curve", texts, rows: () => box.querySelectorAll("tbody tr"), count, total });
+  setTimeout(f.apply);
+  return [h("div", { class: "filters" }, mode, sel, statusSeg, f.input, count, picker, bar), ...out, box, extra];
 }
 
 function taskKind(t) { return t.status === "done" ? ({ positive: "good", negative: "critical", inconclusive: "neutral" }[t.result] || "good") : TASK_KIND[t.status]; }
@@ -1554,12 +1726,16 @@ async function renderTasks() {
   const rows = await api("tasks" + (state.tasksAll ? "?all=1" : ""));
   const mode = h("div", { class: "seg", role: "group", "aria-label": "View" },
     [["list", "List"], ["graph", "Graph"]].map(([v, label]) => h("button", { "aria-pressed": state.tasksMode === v ? "true" : "false", onclick: () => { state.tasksMode = v; load(); } }, label)));
-  const out = [h("div", { class: "filters" }, mode, h("label", {}, h("input", { type: "checkbox", checked: state.tasksAll || null, onchange: e => { state.tasksAll = e.target.checked; load(); } }), " include done and dropped"))];
+  const count = h("span", { class: "count-note" });
+  const texts = rows.map(t => `${t.id} ${t.title} ${t.status} ${t.owner || ""} ${taskLatest(t) || ""} ${t.result || ""}`.toLowerCase());
+  const f = state.tasksMode === "list" ? rowFilter({ key: "taskQuery", placeholder: "filter tasks: words, T12, owner", texts, rows: () => main.querySelectorAll(".tasks-list tbody tr"), count }) : null;
+  const out = [h("div", { class: "filters" }, mode, f ? f.input : null, count, h("label", {}, h("input", { type: "checkbox", checked: state.tasksAll || null, onchange: e => { state.tasksAll = e.target.checked; load(); } }), " include done and dropped"))];
+  if (f) setTimeout(f.apply);
   if (!rows.length) out.push(h("div", { class: "card" }, h("div", { class: "empty" }, "No open tasks. Add one: kx task add \"...\"")));
   else if (state.tasksMode === "graph") out.push(h("div", { class: "card" }, taskGraph(rows)),
     h("div", { class: "dim", style: "font-size:12px;margin-top:6px" }, "Each task sits right of the tasks it depends on; a dashed link is a dependency not done yet.",
       state.tasksAll ? "" : " Done and dropped tasks are hidden, with their links."));
-  else out.push(h("div", { class: "card flush" }, table([["task"], ["p", "num"], ["state"], ["owner"], ["title"], ["latest", "one"]], rows.map(t => [h("span", { class: "id" }, `${t.id}`), h("span", { class: "dim" }, `p${t.priority}`),
+  else out.push(h("div", { class: "card flush tasks-list" }, table([["task"], ["p", "num"], ["state"], ["owner"], ["title"], ["latest", "one"]], rows.map(t => [h("span", { class: "id" }, `${t.id}`), h("span", { class: "dim" }, `p${t.priority}`),
     taskBadge(t), t.owner || "", h("span", { class: "wrap task-ttl", style: "font-weight:500" }, t.title), h("span", { class: "dim" }, taskLatest(t))]),
     i => showTask(rows[i].id))));
   return out;
@@ -1638,15 +1814,25 @@ function taskGraph(rows) {
 async function renderFindings() {
   const rows = await api("findings" + (state.findAll ? "?all=1" : "") + (state.findTag ? `${state.findAll ? "&" : "?"}tag=${encodeURIComponent(state.findTag)}` : ""));
   const tags = [...new Set(rows.flatMap(f => f.tags))].sort();
-  const out = [h("div", { class: "filters" }, h("label", {}, h("input", { type: "checkbox", checked: state.findAll || null, onchange: e => { state.findAll = e.target.checked; load(); } }), " include withdrawn and superseded"),
-    h("select", { "aria-label": "Tag", onchange: e => { state.findTag = e.target.value; load(); } }, h("option", { value: "" }, "all tags"), [...new Set([...tags, state.findTag].filter(Boolean))].map(t => h("option", { value: t, selected: t === state.findTag || null }, t))))];
+  const setTag = t => { state.findTag = t; load(); };
+  const count = h("span", { class: "count-note" });
+  const texts = rows.map(f => `${f.id} ${f.text} ${f.status} ${f.tags.join(" ")} ${f.author || ""} ${f.evidence.map(rid).join(" ")}`.toLowerCase());
+  const filt = rowFilter({ key: "findQuery", placeholder: "filter findings: words, F12, r0123, a tag", texts, rows: () => main.querySelectorAll(".finding"), count });
+  setTimeout(filt.apply);
   const FKIND = { open: "active", confirmed: "good", withdrawn: "neutral", superseded: "neutral" };
-  out.push(h("div", { class: "card", style: "padding:4px 18px" }, rows.length ? rows.map(f => h("div", { class: "finding" },
-    h("div", { class: "head" }, h("span", { class: "id", style: "font-weight:600" }, `${f.id}`), badge(f.status, FKIND[f.status]), f.tags.map(t => h("span", { class: "chip" }, t)),
-      h("span", { class: "dim", style: "font-size:12px" }, `${ago(f.ts)} ago · ${f.author || ""}`)),
-    h("div", { class: "wrap" }, f.text),
-    f.evidence.length ? h("div", { style: "margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;align-items:center" }, h("span", { class: "dim", style: "font-size:12px;margin-right:2px" }, "evidence"), f.evidence.map(e => h("button", { class: "btn small", onclick: () => showRun(rid(e)) }, rid(e)))) : null)) : h("div", { class: "empty" }, "No findings.")));
-  return out;
+  const tagChip = t => /^t\d+$/i.test(t)
+    ? h("button", { class: "chip tag-btn", title: `Open task ${t.toUpperCase()}`, onclick: () => showTask(t.toUpperCase()) }, t)
+    : h("button", { class: "chip tag-btn", title: `Only findings tagged ${t}`, onclick: () => setTag(t) }, t);
+  return [h("div", { class: "filters" }, filt.input, count,
+      h("select", { "aria-label": "Tag", onchange: e => setTag(e.target.value) }, h("option", { value: "" }, "all tags"), [...new Set([...tags, state.findTag].filter(Boolean))].map(t => h("option", { value: t, selected: t === state.findTag || null }, t))),
+      state.findTag ? h("button", { class: "btn", onclick: () => setTag("") }, `✕ ${state.findTag}`) : null,
+      h("label", {}, h("input", { type: "checkbox", checked: state.findAll || null, onchange: e => { state.findAll = e.target.checked; load(); } }), " include withdrawn and superseded")),
+    h("div", { class: "card", style: "padding:4px 18px" }, rows.length ? rows.map(f => h("div", { class: "finding" },
+      h("div", { class: "head" }, h("span", { class: "id", style: "font-weight:600" }, `${f.id}`), badge(f.status, FKIND[f.status]), f.tags.map(tagChip),
+        h("span", { class: "dim", style: "font-size:12px" }, agoEl(f.ts), ` · ${f.author || ""}`)),
+      h("div", { class: "wrap" }, f.text),
+      f.evidence.length ? h("div", { style: "margin-top:8px;display:flex;gap:4px;flex-wrap:wrap;align-items:center" }, h("span", { class: "dim", style: "font-size:12px;margin-right:2px" }, "evidence"), f.evidence.map(e => h("button", { class: "btn small", onclick: () => showRun(rid(e)) }, rid(e)))) : null))
+      : h("div", { class: "empty" }, state.findTag ? `No findings tagged ${state.findTag}.` : "No findings."))];
 }
 
 async function renderSubs() {
@@ -1657,58 +1843,73 @@ async function renderSubs() {
     lad ? h("div", { class: "card tile" }, h("div", { class: "label" }, "Ladder"), h("div", { class: "value" }, `${lad.active} playing`),
       h("div", { class: "sub" }, lad.out ? `a new one retires ${lad.out.id} (${lad.out.episodes || 0}/${lad.need} games)` : "room for a new one")) : null));
   out.push(h("h2", {}, "Submissions", h("span", { class: "h2sub" }, ext(L().submissions, "your submissions on Kaggle"), L().leaderboard ? " · " : null, ext(L().leaderboard, "leaderboard"))));
-  out.push(h("div", { class: "card flush" }, d.submissions.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "nowrap"], ["by"], ["games"], ["why / error", "one"]],
-    d.submissions.map(s => [h("span", { class: "id" }, `${s.id}`), s.run_id ? h("span", { class: "id" }, rid(s.run_id)) : h("span", { class: "dim" }, "external"), badge(s.status, SUB_KIND[s.status]), fmt(s.public), `${ago(s.created)} ago`, s.actor || "",
+  out.push(h("div", { class: "card flush" }, d.submissions.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "nowrap"], ["by"], ["games", "nowrap"], ["why / error", "one"]],
+    d.submissions.map(s => [h("span", { class: "id" }, `${s.id}`), s.run_id ? h("span", { class: "id" }, rid(s.run_id)) : h("span", { class: "dim" }, "external"), badge(s.status, SUB_KIND[s.status]), fmt(s.public), agoEl(s.created), s.actor || "",
       s.games && s.games.winrate != null ? `${s.games.win + s.games.loss + s.games.tie} · ${(s.games.winrate * 100).toFixed(1)}%` : (s.episodes ? `${s.episodes}` : ""),
-      h("span", { class: "dim", title: s.error || s.why || s.message || "" }, s.error || s.why || s.message || "")]), i => showSub(d.submissions[i])) : h("div", { class: "empty" }, "No submissions yet.")));
+      h("span", { class: "dim", title: s.error || s.why || s.message || "" }, s.error || s.why || s.message || "")]), i => showSub(d.submissions[i].id)) : h("div", { class: "empty" }, "No submissions yet.")));
   return out;
 }
 
 const RENDER = { status: renderStatus, training: renderTraining, runs: renderRuns, tasks: renderTasks, findings: renderFindings, subs: renderSubs };
 const main = document.getElementById("main");
-let loading = false, loadAgain = false, lastLoad = 0;
+let loading = false, loadAgain = null, lastLoad = 0, lastDraw = 0;  // loadAgain: "auto" or "forced", asked while a load ran
 const drawn = new Map();  // "comp tab" -> what that tab last showed: shown again at once while it refreshes
-async function load() {
-  if (loading) { loadAgain = true; return; }  // asked meanwhile (another tab, a filter): once this one ends
+// auto: a timed refresh. It changes nothing on the page when every request answered as last time (so what is open,
+// hovered or scrolled stays), and when the server is down it keeps the page and says so.
+async function load(auto = false) {
+  if (loading) { if (loadAgain !== "forced") loadAgain = auto ? "auto" : "forced"; return; }  // once this one ends
   loading = true;
-  const tab = TAB, comp = COMP, current = () => tab === TAB && comp === COMP;
-  main.classList.add("stale");
+  const tab = TAB, comp = COMP, current = () => tab === TAB && comp === COMP, before = changes;
+  const dim = auto ? null : setTimeout(() => main.classList.add("stale"), 150);  // only a slow load dims the page
   try {
     const nodes = (await RENDER[tab]()).flat(Infinity).filter(Boolean);
     if (current()) {
-      const y = window.scrollY, f = document.activeElement;
-      const keep = f && main.contains(f) && f.dataset.keep ? [f.dataset.keep, f.selectionStart, f.selectionEnd] : null;  // typing in it as it refreshes
-      const scrolls = [...main.querySelectorAll("[data-scroll]")].map(el => [el.dataset.scroll, el.scrollTop]);  // a panel that scrolls itself
-      main.replaceChildren(...nodes);
-      for (const [k, top] of scrolls) { const el = main.querySelector(`[data-scroll="${k}"]`); if (el) el.scrollTop = top; }
-      const again = keep && main.querySelector(`[data-keep="${keep[0]}"]`);
-      if (again) { again.focus({ preventScroll: true }); try { again.setSelectionRange(keep[1], keep[2]); } catch (e) { } }
-      window.scrollTo(0, y);
-      drawn.set(`${comp} ${tab}`, nodes);
+      setOffline(null);
       lastLoad = Date.now();
+      if (!(auto && changes === before && main.childElementCount && Date.now() - lastDraw < 300000)) {
+        lastDraw = Date.now();
+        const y = window.scrollY, f = document.activeElement;
+        const keep = f && main.contains(f) && f.dataset.keep ? [f.dataset.keep, f.selectionStart, f.selectionEnd] : null;  // typing in it as it refreshes
+        const scrolls = [...main.querySelectorAll("[data-scroll]")].map(el => [el.dataset.scroll, el.scrollTop]);  // a panel that scrolls itself
+        const open = new Set([...main.querySelectorAll("details[open][data-open]")].map(d => d.dataset.open));
+        main.replaceChildren(...nodes);
+        for (const d of main.querySelectorAll("details[data-open]")) if (open.has(d.dataset.open)) d.open = true;
+        for (const [k, top] of scrolls) { const el = main.querySelector(`[data-scroll="${k}"]`); if (el) el.scrollTop = top; }
+        const again = keep && main.querySelector(`[data-keep="${keep[0]}"]`);
+        if (again) { again.focus({ preventScroll: true }); try { again.setSelectionRange(keep[1], keep[2]); } catch (e) { } }
+        window.scrollTo(0, y);
+        drawn.set(`${comp} ${tab}`, nodes);
+      }
     }
-  } catch (e) { if (current()) main.replaceChildren(errBox(e)); }
-  finally {
-    main.classList.remove("stale"); loading = false; tickUpdated();
-    if (loadAgain || !current()) { loadAgain = false; load(); }
+  } catch (e) {
+    if (current()) {
+      if (e.offline && main.childElementCount && !main.querySelector(":scope > .err-banner")) setOffline(e);
+      else main.replaceChildren(errBox(e));
+    }
+  } finally {
+    clearTimeout(dim); main.classList.remove("stale"); loading = false; tickUpdated();
+    if (loadAgain || !current()) { const a = loadAgain === "auto"; loadAgain = null; load(a); }
   }
 }
 function tickUpdated() { document.getElementById("updated").textContent = lastLoad ? `updated ${dur((Date.now() - lastLoad) / 1000)} ago` : ""; }
-function setTab(t) {
-  const open = drawer.classList.contains("open") && location.hash.split("/")[1];  // a drawer opened from a link keeps it
-  TAB = t; main.classList.toggle("wide", t === "training"); history.replaceState(null, "", `?comp=${encodeURIComponent(COMP)}#${t}${open ? "/" + open : ""}`);
+// push: a new history entry (a click), so Back returns to the tab before; route() passes false
+function setTab(t, push = true) {
+  const open = drawerState && drawerState.hash;  // an open drawer stays open on the other tab
+  TAB = t; main.classList.toggle("wide", t === "training");
+  const u = pageUrl(t, open);
+  if (push && location.search + location.hash !== u) { history.pushState(null, "", u); drawerPushed = false; }
+  else history.replaceState(null, "", u);
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === t ? "true" : "false"));
   main.replaceChildren(...(drawn.get(`${COMP} ${t}`) || [])); syncPicks(); load();
 }
 const tabs = document.getElementById("tabs");
-for (const [id, label] of TABS) tabs.append(h("button", { role: "tab", "data-tab": id, "aria-selected": id === TAB ? "true" : "false", onclick: () => setTab(id) }, label));
+TABS.forEach(([id, label], i) => tabs.append(h("button", { role: "tab", "data-tab": id, "aria-selected": id === TAB ? "true" : "false", title: `${label} (${i + 1})`, onclick: () => setTab(id) }, label)));
 document.getElementById("refresh").addEventListener("click", () => drawer.classList.contains("open") ? refreshDrawer() : load());
 document.getElementById("theme").addEventListener("click", () => {
   const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   const next = cur === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next;
   try { localStorage.setItem("kx-theme", next); } catch (e) { }
 });
-try { const t = localStorage.getItem("kx-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { }
 function renderLinks() {
   const l = L(), c = COMPS.find(x => x.slug === COMP) || {}, box = document.getElementById("klinks");
   const ours = [ext(l.kernel, "Our notebook", l.kernel), ...(c.datasets || []).map(d => ext(d.url, `Dataset ${d.ref.split("/")[1]}`, d.url))].filter(Boolean);
@@ -1718,27 +1919,54 @@ function renderLinks() {
 }
 document.addEventListener("click", e => { const m = document.getElementById("kmenu"); if (m.open && !m.contains(e.target)) m.open = false; });
 document.addEventListener("keydown", e => { const m = document.getElementById("kmenu"); if (e.key === "Escape" && m.open) { m.open = false; m.querySelector("summary").focus(); } });
-api("comps").then(cs => {
-  COMPS = cs; renderLinks();
-  const sel = document.getElementById("comp");
-  const sub = document.getElementById("compsub");
-  const describe = () => { const c = cs.find(x => x.slug === COMP); sub.textContent = c && c.kind ? [c.title !== c.slug ? c.title : null, `${c.kind} · ${c.mode} · ${c.metric} (${c.direction})`, c.days_left != null ? (c.days_left >= 0 ? `${Math.round(c.days_left)} days left` : "ended") : null].filter(Boolean).join(" · ") : ""; };
-  for (const c of cs) sel.append(h("option", { value: c.slug, selected: c.slug === COMP || null }, c.slug));
-  describe();
+// The page the address says: Back and Forward, an edited or pasted link (?comp=…#tab/run=r0012).
+function route() {
+  const c = new URLSearchParams(location.search).get("comp");
+  if (c && c !== COMP && COMPS.some(x => x.slug === c)) switchComp(c, false);
+  const [tab, deep = ""] = location.hash.slice(1).split("/");
+  const t = TABS.some(([id]) => id === tab) ? tab : "status";
+  const sheet = /^(run|task|sub)=./.test(deep) ? deep : null;
+  if (deep.startsWith("compare=")) setSelection(deep.slice(8).split(",").filter(Boolean));
+  if (t !== TAB || !main.childElementCount) setTab(t, false);
+  else if (deep.startsWith("compare=") && t === "training") load();
+  if (!sheet) closeDrawer();
+  else if (!drawerState || drawerState.hash !== sheet) { const [k, v] = sheet.split("="); ({ run: showRun, task: showTask, sub: showSub })[k](decodeURIComponent(v), false); }
+}
+window.addEventListener("popstate", route);
+window.addEventListener("hashchange", route);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - lastLoad > 15000) drawer.classList.contains("open") ? refreshDrawer(drawerState, true) : load(true); });
+const compSel = document.getElementById("comp"), compSub = document.getElementById("compsub");
+function describeComp() {
+  const c = COMPS.find(x => x.slug === COMP);
+  compSub.textContent = !c ? "" : c.error ? `cannot open: ${c.error}` : c.kind ? [c.title !== c.slug ? c.title : null, `${c.kind} · ${c.mode} · ${c.metric} (${c.direction})`,
+    c.days_left != null ? (c.days_left >= 0 ? `${Math.round(c.days_left)} days left` : "ended") : null].filter(Boolean).join(" · ") : "";
+  compSub.title = c && c.error ? [c.error, c.fix].filter(Boolean).join("\nfix: ") : compSub.textContent;
   document.title = `${COMP} · kx`;
-  sel.addEventListener("change", e => { COMP = e.target.value; resetCompare(); loadSelection(); describe(); renderLinks(); document.title = `${COMP} · kx`; closeDrawer(); setTab(TAB); });
-}).catch(() => { }).finally(() => setTab(TABS.some(([id]) => id === TAB) ? TAB : "status"));  // first render once the links are known
+}
+function switchComp(c, push = true) {
+  COMP = c; compSel.value = c; resetCompare(); loadSelection(); protosCache = null;
+  Object.assign(state, { histProtocol: "", lbProtocol: "", runsProtocol: "", findTag: "", runsStatus: "all" });  // another competition's protocols and tags mean nothing here
+  describeComp(); renderLinks();
+  if (drawerState) closeDrawer();
+  if (push) { history.pushState(null, "", pageUrl(TAB)); drawerPushed = false; }
+  setTab(TAB, false);
+}
 setInterval(() => {
   if (!document.hidden) {
     if (drawer.classList.contains("open")) {
-      if (drawerState?.live && Date.now() - drawerState.updated > 5000) refreshDrawer();  // a run's refresh brings only its new points
-    } else if (Date.now() - lastLoad > (TAB === "training" ? (ws.live ? 5000 : 60000) : 15000)) load();  // nothing running: its charts stand still
+      if (drawerState?.live && Date.now() - drawerState.updated > 5000) refreshDrawer(drawerState, true);  // a run's refresh brings only its new points
+    } else if (Date.now() - lastLoad > (TAB === "training" ? (ws.live ? 5000 : 60000) : 15000)) load(true);  // nothing running: its charts stand still
   }
-  tickUpdated();
+  tickUpdated(); tickAgo();
 }, 5000);
-const deep = location.hash.slice(1).split("/")[1];
+// -- startup ------------------------------------------------------------------------------------------------------
 loadSelection();
-if (deep) { const [k, v] = deep.split("="); if (k === "run") showRun(v); if (k === "task") showTask(v); if (k === "compare") { setSelection(v.split(",").filter(Boolean)); showCompare(); } }
+compSel.addEventListener("change", e => switchComp(e.target.value));
+api("comps").then(cs => {
+  COMPS = cs;
+  for (const c of cs) compSel.append(h("option", { value: c.slug, selected: c.slug === COMP || null, title: c.error || c.path }, c.slug + (c.error ? " (cannot open)" : "")));
+  describeComp(); renderLinks();
+}).catch(e => setOffline(e)).finally(route);  // first render once the links are known
 </script>
 </body>
 </html>

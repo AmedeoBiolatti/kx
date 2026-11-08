@@ -99,7 +99,14 @@ in its own session (stop it with `kill PID`: it is recorded as failed); then `kx
 ## Dashboard
 
 `kx dashboard` serves a local page (Status, Training, Runs, Tasks, Findings, Submissions) over the same data as
-`--json`.
+`--json`, for every competition on this machine: a picker at the top switches between them. It starts anywhere, and
+finds them by itself, best effort: the ones kx has been used in here (it notes each one it opens, in
+`~/.cache/kx/projects.json`), the competition folders next to those and next to kx's own checkout, and a quick look
+around the current folder and the home folder. `kx dashboard DIR ...` looks in other folders too. A competition that
+cannot be opened is listed with why.
+
+In [NextCode](https://github.com/AmedeoBiolatti/nextcode), the dashboard is one native editor tab with the same pages
+(Overview, Runs, Training as a wandb-like workspace, Tasks, Findings, Submissions): [nextcode/](nextcode/README.md).
 
 - **Training** works like wandb: the runs that log curves on the left (state, when, how long, host, score; filter,
   or order by the curves they share), and the curves of up to 8 shown runs overlaid on the right, grouped by prefix
@@ -107,8 +114,9 @@ in its own session (stop it with `kill PID`: it is recorded as failed); then `kx
   config and code. x is the step, the time since start, or a counter the runs log (samples, epochs), which lines up
   runs that count steps differently; drag across a chart to zoom (double-click goes back). "Mean of repeats" draws
   runs with the same code, command and config but for the seed as one line with their range shaded ("+N repeats"
-  on a run adds them). `#training/compare=r12,r15` links to it; ticking runs in the Runs tab or "Compare…" on a run
-  opens it with them.
+  on a run adds them). `#training/compare=r12,r15` links to it; ticking runs in the Runs tab or "Show in Training" on a run
+  opens it with them. Every page and drawer has its own link (`#runs/run=r12`, `#tasks/task=T7`, `#subs/sub=S3`)
+  and Back returns to the one before; `1`-`6` switch tabs, `/` filters the page.
 - **Runs** works like mlflow: every run with columns of its config keys and reported metrics (pick them under
   Columns), sorted by any column, and any two numbers plotted against each other (a setting against the score).
 - Curves come from the whole of `metrics.jsonl`, cut for drawing to the first, last, lowest and highest point of
@@ -470,10 +478,11 @@ src/kx/
   workers/      spawn (launch, stop, liveness), runner (the run loop), streams (harness output)
   sandbox.py    machine roles (workspace, executor) and the bubblewrap sandbox workers run in
   wait.py       what kx wait waits for: runs (ended, --until, stalled), submissions, kernel versions
-  views/        kx status / kx context, the dashboard, text rendering
+  views/        kx status / kx context, the dashboard and its NextCode panel, text rendering
   setup/        kx init (scaffold, docs/kx.md template)
   cli/          main.py (parser, dispatch) and one module of commands per area above
 tests/          one file per area
+nextcode/       the NextCode extension: kx.wasm starts `kx nextcode panel`, which draws the panel (views/nextcode/)
 ```
 
 How the shared ledger works is in [The ledger](#the-ledger-machines-and-people) and

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import secrets
 import subprocess
@@ -30,7 +31,7 @@ ROUTES = {  # path -> kx argv builder from the query string
     "runs": lambda q: ["runs", "-n", q.get("n", "200")] + (["--task", q["task"]] if q.get("task") else [])
     + (["--tag", q["tag"]] if q.get("tag") else []) + (["--curves"] if q.get("curves") else [])
     + (["--config"] if q.get("config") else []),
-    "compare": lambda q: ["compare", q["a"], q["b"]],
+    "compare": lambda q: ["compare", need(q, "a"), need(q, "b")],
     "board": lambda q: ["board", "-n", q.get("n", "50")] + ([q["protocol"]] if q.get("protocol") else []),
     "protocols": lambda q: ["protocol", "list"],
     "tasks": lambda q: ["task", "list"] + (["--all"] if q.get("all") else []),
@@ -39,6 +40,12 @@ ROUTES = {  # path -> kx argv builder from the query string
     "workers": lambda q: ["workers", "--all"],
     "budget": lambda q: ["budget"],
 }
+
+
+def need(q: dict, key: str) -> str:
+    if not q.get(key):
+        raise KxError(f"missing ?{key}= in the request")
+    return q[key]
 
 
 TRIM = {  # route -> what the page reads of the command's data
@@ -53,10 +60,33 @@ def run_kx(argv: list[str]):
     if _parser is None:  # building it takes longer than most commands (callers hold LOCK)
         from kx.cli.main import build_parser
         _parser = build_parser()
-    a = _parser.parse_args(argv)
-    with redirect_stderr(io.StringIO()):
-        out = a.func(a)
-    return out.data
+    err = io.StringIO()
+    try:
+        with redirect_stderr(err):
+            a = _parser.parse_args(argv)
+            out = a.func(a)
+    except SystemExit:  # argparse refuses the arguments (a bad ?n=): an error page, not a dropped connection
+        lines = [x for x in err.getvalue().strip().splitlines() if x.strip()]
+        raise KxError(lines[-1] if lines else f"bad request: kx {' '.join(argv)}") from None
+    return out.data if out is not None else None
+
+
+def _finite(o):
+    """JSON has no NaN or Infinity (the browser refuses the whole response): they become null."""
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: _finite(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_finite(v) for v in o]
+    return o
+
+
+def to_json(obj) -> bytes:
+    try:
+        return json.dumps(obj, default=str, allow_nan=False).encode()
+    except ValueError:  # a NaN somewhere (a metric, a config value): only then walk it
+        return json.dumps(_finite(obj), default=str, allow_nan=False).encode()
 
 
 def sync(root: Path) -> tuple[int, dict]:
@@ -157,8 +187,9 @@ def describe(name: str, root: Path) -> dict:
                 "metric": comp.metric, "direction": comp.direction, "days_left": dl["days_left"],
                 "links": competition.links(comp),
                 "datasets": [{"ref": d, "url": competition.dataset_url(d)} for d in datasets]}
-    except Exception:  # noqa: BLE001 - a broken competition still appears in the picker
-        return {"slug": name, "path": str(root)}
+    except Exception as e:  # noqa: BLE001 - a broken competition still appears in the picker, with why
+        return {"slug": name, "path": str(root), "error": str(e) if isinstance(e, KxError) else f"{type(e).__name__}: {e}",
+                "fix": getattr(e, "fix", None)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -180,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, code: int, obj):
-        self._send(code, json.dumps(obj, default=str).encode())
+        self._send(code, to_json(obj))
 
     def _host_ok(self) -> bool:
         host = (self.headers.get("Host") or "").split(":")[0]
@@ -258,19 +289,36 @@ class Handler(BaseHTTPRequestHandler):
             SYNCING.release()
 
 
-def serve(port: int = 8765, open_browser: bool = False):
+def competitions(dirs=()) -> tuple[dict[str, Path], str]:
+    """Every competition this machine has (best effort: kx.ledger.projects), by a name for the picker (its folder's,
+    with its parent's when two share one), and the one to show first: the current one, else the most recently used."""
+    from kx.ledger import projects
+    roots = projects.discover(list(dirs))
+    names = {}
+    for r in roots:
+        names.setdefault(r.name, []).append(r)
+    comps = {}
+    for r in roots:
+        comps[r.name if len(names[r.name]) == 1 else f"{r.parent.name}/{r.name}"] = r
+    try:
+        here = config.load().main_root.resolve()
+    except KxError:
+        here = None
+    by_root = {v: k for k, v in comps.items()}
+    default = by_root.get(here) if here else None
+    if default is None:
+        default = next((by_root[p] for p in projects.known() if p in by_root), next(iter(comps), ""))
+    return comps, default
+
+
+def serve(port: int = 8765, open_browser: bool = False, dirs=()):
     if os.environ.get("KX_AGENT"):
         raise KxError("the dashboard is for the person driving, not for a worker")
-    comp = config.load()
-    comps = {}
-    for root in config.competitions(config.workspace_of(comp)):
-        try:
-            config.load(root)
-            comps[root.name] = root
-        except KxError:
-            continue
-    comps.setdefault(comp.main_root.name, comp.main_root)
-    Handler.token, Handler.comps, Handler.default = secrets.token_urlsafe(16), comps, comp.main_root.name
+    comps, default = competitions(dirs)
+    if not comps:
+        raise KxError("no competition found on this machine (a folder with a comp.yaml)",
+                      fix="run kx dashboard in a competition, or name where they are: kx dashboard DIR")
+    Handler.token, Handler.comps, Handler.default = secrets.token_urlsafe(16), comps, default
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)  # one thread per connection: a browser's idle
         httpd.daemon_threads = True                                    # one must not hold up the others
@@ -291,9 +339,11 @@ def serve(port: int = 8765, open_browser: bool = False):
 
 def add_command(cmd, Out):
     def cmd_dashboard(a):
-        serve(a.port, a.open)
+        serve(a.port, a.open, a.dirs)
         return None
 
     s = cmd("dashboard", cmd_dashboard, "local web page: status, runs, tasks, findings, submissions")
     s.add_argument("--port", type=int, default=8765)
     s.add_argument("--open", action="store_true", help="open it in the browser")
+    s.add_argument("dirs", nargs="*", metavar="DIR", help="folders to look in for competitions too (it finds the ones "
+                   "kx has used on this machine and the ones next to them by itself)")
