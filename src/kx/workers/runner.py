@@ -80,6 +80,8 @@ def run(comp, wid: str, *, env: dict | None = None, echo: bool = False) -> int:
     elif code != 0:
         why = f"its harness exited with code {code}"
     _wrap_task(store, w, why or "the session ended without kx task done/wait", last=st.result or st.text)
+    from kx import notify
+    notify.quietly(store)  # what the worker left for its person: a request, a failure, a finished task
     store.close()
     return code
 

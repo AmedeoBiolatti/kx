@@ -4,6 +4,7 @@ opens it in its own page."""
 
 from __future__ import annotations
 
+from kx.board.decide import waits
 from kx.views.nextcode import Ctx, Go, comp, footer, header, states
 from kx.views.nextcode.widgets import (BLUE, GREEN, GREY, HOST, RED, chart, col, esc, grid, label, md, progress, select,
                                        stat, table, thin, tick, trunc)
@@ -13,13 +14,21 @@ def view(ctx: Ctx) -> tuple[dict, dict]:
     from kx.ledger.store import Store
     from kx.views import status
     from kx.views.dashboard import history, leaderboard
+    from kx.views import brief
+    from kx.views.nextcode import decide
     c = comp()
     with Store(c) as st:
         d = status.status(st)
+    state0: dict = {}
+    if decide.handle(ctx, state0, d["needs_you"]):  # a decision settled, a chore done: the panel as it is now
+        with Store(c) as st:
+            d = status.status(st)
+    with Store(c) as st:
+        b = brief.brief(st)
     hist = history(c.root, ctx.value("protocol", "") or None)
     lbd = leaderboard(c.root, None)
     state = {"protocol": hist["protocol"], "metric": ctx.value("metric", ""), "run": ctx.state.get("run"), "x0": {},
-             "tasks": [], "subs": []}
+             "tasks": [], "subs": [], **state0}
     for table_, page in (("tasks", "tasks"), ("subs", "subs")):  # a row: that task or submission, in its page
         if (key := ctx.row(table_, ctx.state.get(table_) or [])) is not None:
             raise Go(page, open=key)
@@ -36,7 +45,7 @@ def view(ctx: Ctx) -> tuple[dict, dict]:
     from kx.views.nextcode.runs import run_card
     body = [header(d["competition"]["slug"], competition_line(d["competition"])
                    + (" · click a point on a chart to open its run" if charts and HOST.api >= 4 else "")),
-            needs(d["needs_you"]), stats(d), grid("charts", *charts, min_width=440),
+            *decide.since(b), *decide.needs(d["needs_you"], state, ctx), stats(d), grid("charts", *charts, min_width=440),
             col("card", *run_card(state["run"], ctx.tight)) if state["run"] else None,
             *running(d["running"]), *submissions(d["submissions"]["recent"], state), *task_list(d["tasks"], ctx.tight, state),
             *budget_list(d["budgets"]), footer()]
@@ -48,16 +57,6 @@ def competition_line(c: dict) -> str:
     left = f" · {c['days_left']:.0f} days left" if c.get("days_left") is not None and c["days_left"] >= 0 else \
         (" · ended" if c.get("days_left") is not None else "")
     return f"{c['kind']} competition · {esc(c['metric'])} ({c['direction']}){left}"
-
-
-def needs(items: list[dict]) -> dict:
-    if not items:
-        return md("needs", "✓ Nothing needs you right now.")
-    from kx.views.text import dur
-    lines = [f"- {esc(n['what'])}" + (f" · {dur(n['age_s'])}" if n.get("age_s") is not None else "")
-             + f"  `{tick(n['fix'])}`" for n in items[:12]]
-    more = [f"- … {len(items) - 12} more: `kx status`"] if len(items) > 12 else []
-    return md("needs", f"### Needs you · {len(items)}\n\n" + "\n".join(lines + more))
 
 
 def stats(d: dict) -> dict:
@@ -239,7 +238,7 @@ def task_list(t: dict, tight: bool, state: dict) -> list[dict]:
         return out + [label("tasks-empty", "No active or ready tasks.")]
     state["tasks"] = [x["id"] for x in tl]
     rows = [[x["id"], trunc(x["title"], 90), states.task(x),
-             trunc(f"waits on {x['waiting_on']}" if x["status"] == "waiting" else (x.get("last_note") or {}).get("text"),
+             trunc(waits(x) if x["status"] == "waiting" else (x.get("last_note") or {}).get("text"),
                    60 if tight else 160)] for x in tl]
     return out + [table("tasks", ["task", "title", "state", "latest"], rows, widths=[50, 320, 90, 0], selectable=True)]
 

@@ -5,10 +5,14 @@ agent you talk to in your terminal, background workers, your other machines and 
 records, checks and talks to Kaggle; it never decides what to work on and never runs anything on its own.
 
 ```bash
+kx             # what happened since you last looked, and what needs you: on a terminal, settle it there
 kx status      # what is running, what needs you (with the command that fixes it), results, submissions, budgets
 kx context     # what an agent reads first: its task, the reference protocol, best runs, findings, rules
-kx dashboard   # the same on a local web page (http://localhost:8765)
+kx dashboard   # the same on a local web page (http://localhost:8765), where you also settle what needs you
 ```
+
+You do not need to learn the rest: the agent you talk to runs kx for you, and what needs you comes to you
+([Working together](#working-together)).
 
 Every command takes `--json`. Exit codes: `0` ok · `1` error (with a `fix:` line) · `2` usage · `3` needs
 confirmation · `4` over a budget or Kaggle limit · `5` not comparable · `6` what `kx wait` waited for can no longer
@@ -330,6 +334,47 @@ active for over 3 days with nothing new, findings whose evidence failed after th
 got 3 or more versions in 7 days (run settings put in the spec split scores into groups that do not compare; a run
 scored under a version other than its name's most-scored one gets a note saying so, and so does its result line).
 
+## Working together
+
+The person's part is to steer, to decide, and to judge results; the agents do the rest, kx included. So what needs
+the person comes to them in a form they can answer without commands, wherever they are:
+
+- **A brief.** `kx brief` (and `kx` alone) says what happened since you last looked: the runs that ended and what
+  they came to, a new best, tasks finished with their outcome, findings, submissions sent and scored, workers that
+  ended, what was spent. Then what needs you. `kx init` adds a Claude Code SessionStart hook (`kx brief --hook` in
+  `.claude/settings.json`), so each session with your agent starts from it; "last looked" (kept per machine) moves
+  when you see it there, run `kx` on a terminal, or press Got it on the dashboard.
+- **Decisions, chores and advice.** Each item of "needs you" says whose it is (`who` in `--json`): a *decision* is
+  yours (send what a worker asked for, answer its question, merge its branch, retry it), a *chore* is bookkeeping
+  anyone may do, your agent included (`kx reap`, `kx remote sync`, `kx sync`), *advice* is worth knowing. Each
+  comes with the actions that settle it.
+- **One step per decision.** A worker that may not send parks its task on the command
+  (`kx task wait T7 --on "kx submit r41 ... --yes"`), or on a question (`--on "person: 5 or 10 folds?"`).
+  `kx approve T7` shows the command's own preview; `kx approve T7 --yes` runs it as you; `kx answer T7 "..."`
+  replies (to a command: it is not run, and why). `--resume` then starts the worker that asked again. Running the
+  command yourself settles the task too. Afterwards the task can go on (a submission leaves it waiting on its
+  score), and `kx status` offers to resume it with that worker.
+- **Anywhere.** The dashboard's Status tab and the NextCode panel show each decision with its buttons: Send…
+  (the preview, then Send, "then resume it with sonnet-1"), Decline… or Answer… (a field), Merge, Resume with,
+  Do them for the chores. On a terminal, `kx` walks you through them one by one. Or tell your agent ("send it").
+  The page runs only these actions (`kx.views.actions.allowed`), with the token it was served.
+- **Notices.** kx tells you when something needs you, when it records it: a worker's request or failure, a task
+  it finished, a new best, a submission scored. Each thing once, several in one notice, never on a timer. On by
+  default as a desktop notification where one can be shown; for a phone, [ntfy](https://ntfy.sh):
+
+  ```yaml
+  # ~/.config/kx/machine.yaml
+  notify:
+    ntfy: https://ntfy.sh/a-long-random-topic   # the ntfy app subscribed to it; or your own ntfy server
+    desktop: true                               # notify-send / macOS
+    command: [my-notifier]                      # anything else: gets the title and the text
+  ```
+
+  `kx notify --test` tries each; `notify: false` or `KX_NOTIFY=off` turns them off.
+- **Steering.** A note on a run or a task (the dashboard's note box, or `kx note R` / `kx task note T`) reaches the
+  next agent: `kx context` lists the person's latest notes. New tasks and "give it to a worker" are on the
+  dashboard too.
+
 ## Kaggle
 
 `kx submit R -m "..." --why "..." --expect "..."` builds an immutable artifact, smoke-tests it, checks slots,
@@ -343,7 +388,8 @@ is still processing on Kaggle (the kernel would get its previous version), and f
 code with `{"run", "git_sha", "datasets": {ref: run}}`, so the kernel can check it got the right data.
 
 A worker (`KX_AGENT` set) does not send: with `--yes` kx refuses (exit 3) and prints the command. The worker records
-it with `kx task wait T7 --on "kx submit ... --yes"`; `kx status` shows it to you, and you run it.
+it with `kx task wait T7 --on "kx submit ... --yes"`; you get a notice and approve it in one step
+(`kx approve T7 --yes`, Send on the dashboard), or say why not.
 
 ## Waiting
 
@@ -472,13 +518,15 @@ src/kx/
   runs/         kx.run, kx exec, protocols, compare, progress and curves, run objects
   capture/      what code logs to wandb / MLflow, recorded in its run (one adapter per library, an import hook)
   remote/       hosts (ssh, mailbox), run.sh, kx exec --on (ship, launch, copy back, record), the mailbox agent
-  board/        tasks and findings
+  board/        tasks and findings; decide: what waits on the person (kx approve, kx answer)
   kaggle/       the Kaggle CLI client, competition pages, data, submissions, kernels, ladder
   guard/        actors, budgets, the project's rules (runs.on, storage), the gate on actions that leave the machine
   workers/      spawn (launch, stop, liveness), runner (the run loop), streams (harness output)
   sandbox.py    machine roles (workspace, executor) and the bubblewrap sandbox workers run in
   wait.py       what kx wait waits for: runs (ended, --until, stalled), submissions, kernel versions
-  views/        kx status / kx context, the dashboard and its NextCode panel, text rendering
+  views/        kx status / kx context / kx brief, the actions on what needs the person, the dashboard and its
+                NextCode panel, text rendering
+  notify.py     notices to the person (desktop, ntfy, a command) when kx records something that needs them
   setup/        kx init (scaffold, docs/kx.md template)
   cli/          main.py (parser, dispatch) and one module of commands per area above
 tests/          one file per area
@@ -493,8 +541,9 @@ The older autopilot version is tag `v1`.
 ## Privacy
 
 kx keeps everything on your machines: the ledger, runs and data. It talks only to Kaggle (through the kaggle CLI),
-to hosts you configure, and to the storage you name for mailbox hosts and for `share:` (the logs and run records of
-the projects you sync). The Google Drive app it uses through
+to hosts you configure, to the storage you name for mailbox hosts and for `share:` (the logs and run records of
+the projects you sync), and, when you set `notify.ntfy`, to that ntfy server (the notices' text: task, run and
+submission names and what they wait on). The Google Drive app it uses through
 rclone is described in [PRIVACY.md](PRIVACY.md).
 
 MIT licensed ([LICENSE](LICENSE)).

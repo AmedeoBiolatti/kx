@@ -253,8 +253,11 @@ WAITS = (("tasks", re.compile(r"^(?:task:)?(T[\w~-]+)")), ("runs", re.compile(r"
 
 
 def waiting_resolved(store: Store, t: dict) -> str | None:
-    """Why a waiting task can go on now (what it waited for has happened), or None."""
+    """Why a waiting task can go on now (what it waited for has happened, or the person answered), or None."""
+    from kx.board.decide import resolved
     on = t.get("waiting_on") or ""
+    if (why := resolved(on)) is not None:
+        return why
     for table, pat in WAITS:
         m = pat.search(on)
         if not m:

@@ -355,6 +355,25 @@ details.table-view summary { cursor: pointer; color: var(--muted); font-size: 12
 .count-note { color: var(--muted); font-size: 12px; }
 .tag-btn { cursor: pointer; border: 1px solid transparent; }
 .tag-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
+/* what needs you: a decision opens below its line (the preview to confirm, the answer to type); chores in one go */
+.need .more { grid-column: 2 / -1; margin-top: 6px; padding: 10px 12px; border-radius: 8px; background: var(--sunken); border: 1px solid var(--border); }
+.need .more .kv { margin: 0 0 8px; }
+.need .more .problems { color: var(--crit-ink); margin: 0 0 8px; }
+.need .more .row, .form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.needs .group { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; padding: 8px 0 2px; display: flex; align-items: center; gap: 8px; }
+.needs .group:first-child { padding-top: 0; }
+.need.advice .what { font-weight: 400; color: var(--ink-2); }
+textarea, input[type=text] { font: inherit; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; box-shadow: var(--shadow); width: 100%; box-sizing: border-box; }
+textarea { min-height: 54px; resize: vertical; }
+.btn[disabled] { opacity: .55; cursor: default; }
+.since .line { display: grid; grid-template-columns: 96px 1fr; gap: 10px; padding: 3px 0; }
+.since .line .k { color: var(--muted); font-size: 12px; padding-top: 1px; }
+.since a { cursor: pointer; }
+.form { margin-top: 10px; }
+.form h4 { margin: 0 0 6px; font-size: 12.5px; color: var(--ink-2); }
+.toast { position: fixed; right: 18px; bottom: 18px; z-index: 31; max-width: 520px; white-space: pre-wrap; background: var(--raised); border: 1px solid var(--border); border-left: 3px solid var(--good); border-radius: 8px; box-shadow: var(--shadow-lg); padding: 8px 14px; font-size: 12.5px; }
+.toast.bad { border-left-color: var(--critical); }
+.toast[hidden] { display: none; }
 </style>
 <script>try { const t = localStorage.getItem("kx-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { }  /* before the first paint: no flash of the other theme */</script>
 </head>
@@ -375,6 +394,7 @@ details.table-view summary { cursor: pointer; color: var(--muted); font-size: 12
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-hidden="true"></aside>
 <div class="offline" id="offline" role="status" hidden></div>
+<div class="toast" id="toast" role="status" hidden></div>
 <script>
 "use strict";
 const TOKEN = "__KX_TOKEN__";
@@ -984,6 +1004,7 @@ async function showRun(ref, push = true) {
       h("div", { class: "cmd", style: "margin-top:6px" }, `kx fetch ${r.run} ${left.length === 1 ? left[0].path : "[PATH ...]"}`));
     if (r.pushes && r.pushes.length) out.push(h("h2", {}, "On Kaggle"), table([["pushed"], ["what"], ["version", "num"], ["when", "num"]],
       r.pushes.map(p => [p.kind, p.url ? ext(p.url, p.target) : h("span", { class: "id" }, p.target), p.version ?? "", `${ago(p.created)} ago`])));
+    out.push(noteForm(["note"], r.run, "What you see in it: a doubt, a lead, what to try next…"));
     return out;
   }, `run=${ref}`, true, true, push);
 }
@@ -1310,13 +1331,14 @@ async function showTask(id, push = true) {
   openDrawer(async () => {
     const t = await api(`task/${encodeURIComponent(id)}`);
     const out = [h("h3", {}, `${t.id} ${t.title}`), h("div", { style: "margin:6px 0 12px" }, badge(t.status + (t.result ? ` · ${t.result}` : ""), TASK_KIND[t.status]), h("span", { class: "dim" }, `  p${t.priority}${t.owner ? " · " + t.owner : ""}`))];
-    out.push(kv([["waiting on", t.waiting_on], ["depends on", (t.depends || []).join(", ") || null], ["branch", t.branch], ["worktree", t.worktree ? h("span", { class: "cmd" }, t.worktree) : null]]));
+    out.push(kv([[waits(t) && waits(t).startsWith("can go on") ? "can go on" : "waiting on", waits(t) ? waits(t).replace(/^(waits on|can go on:) /, "") : null], ["depends on", (t.depends || []).join(", ") || null], ["branch", t.branch], ["worktree", t.worktree ? h("span", { class: "cmd" }, t.worktree) : null]]));
     if (t.body) out.push(h("h2", {}, "Description"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.body));
     if (t.outcome) out.push(h("h2", {}, "Outcome"), h("div", { class: "wrap", style: "white-space:pre-wrap" }, t.outcome));
     if (t.notes && t.notes.length) out.push(h("h2", {}, "Progress notes", h("span", { class: "h2sub" }, `${t.notes.length}, newest first`)),
       [...t.notes].sort((a, b) => String(b.ts).localeCompare(String(a.ts))).map(n => h("div", { class: "note" }, h("div", { class: "when" }, agoEl(n.ts), ` · ${n.author || ""}`), h("div", { class: "wrap", style: "white-space:pre-wrap" }, n.text))));
     if (t.runs && t.runs.length) out.push(h("h2", {}, "Runs"), table([["run"], ["status"], ["hypothesis"]], t.runs.map(r => [h("span", { class: "id" }, rid(r.id)), badge(r.status, RUN_KIND[r.status]), h("span", { class: "wrap" }, r.hypothesis || "")]), i => showRun(rid(t.runs[i].id))));
     if (t.findings && t.findings.length) out.push(h("h2", {}, "Findings"), t.findings.map(f => h("div", { class: "note wrap" }, h("strong", {}, `${f.id} `), h("span", { class: "chip" }, f.status), " ", f.text)));
+    out.push(giveTask(t), noteForm(["task", "note"], t.id, "What you think of it, what to try next…"));
     return out;
   }, `task=${id}`, false, false, push);
 }
@@ -1360,30 +1382,195 @@ function setCount(tab, n) {
   b.querySelector(".count")?.remove(); if (n) b.append(h("span", { class: "count" }, n));
 }
 
+// -- what the person does here: settle what needs them, notes, tasks, workers (POST /api/do; the server runs only the
+// command lines kx lists or allows) ----------------------------------------------------------------------------------
+function act(argv) { return api("do", { method: "POST", headers: { "X-KX-Token": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify({ argv }) }); }
+const toastEl = document.getElementById("toast");
+let toastTimer = null;
+function toast(text, bad = false) {
+  toastEl.textContent = text; toastEl.classList.toggle("bad", bad); toastEl.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { toastEl.hidden = true; }, bad ? 15000 : 7000);
+}
+// run one command line for the person, say what came of it, show the page as it is now
+async function doIt(argv, after) {
+  try { const r = await act(argv); toast(r.text || "done"); if (after) await after(r); return r; }
+  catch (e) { if (e.offline) setOffline(e); toast(e.message + (e.fix ? `\nfix: ${e.fix}` : ""), true); return null; }
+  finally { load(); if (drawerState) refreshDrawer(); }
+}
+// A decision's card below its line, kept across refreshes: the preview to confirm, the answer being typed, a failure.
+const deciding = {};
+const needKey = n => `${COMP} ${n.kind} ${n.ref || ""}`;
+function needAction(n, a) {
+  const key = needKey(n), d = deciding[key];
+  const busy = d && d.mode === "busy";
+  return h("button", { class: `btn${a.primary ? " primary" : ""}`, disabled: busy || null, title: "kx " + (a.preview || a.argv).join(" "), onclick: async () => {
+    if (a.input) { deciding[key] = { mode: "input", action: a, text: (d && d.text) || "", resume: d ? d.resume : true }; load(); return; }
+    if (a.preview) {
+      deciding[key] = { mode: "busy", action: a, label: "Preparing the preview…" }; load();
+      try { deciding[key] = { mode: "confirm", action: a, preview: await act(a.preview), resume: true }; }
+      catch (e) { deciding[key] = { mode: "error", action: a, error: e }; }
+      load(); return;
+    }
+    settle(n, a, a.argv);
+  } }, a.label + (a.input || a.preview ? "…" : ""));
+}
+async function settle(n, a, argv) {
+  const key = needKey(n), d = deciding[key], resume = d && d.resume !== false && a.resume;
+  deciding[key] = { mode: "busy", action: a, label: "Running…" }; load();
+  try {
+    const r = await act(argv);
+    let text = r.text || "done";
+    if (resume) {
+      try { text += "\n" + ((await act(a.resume)).text || "resumed"); }
+      catch (e) { text += `\nnot resumed: ${e.message}`; }
+    }
+    delete deciding[key]; toast(text);
+  } catch (e) { if (e.offline) setOffline(e); deciding[key] = { mode: "error", action: a, error: e }; }
+  load();
+}
+function resumeBox(d, a) {
+  return a.resume ? h("label", { class: "dim" }, h("input", { type: "checkbox", checked: d.resume !== false || null, onchange: e => { d.resume = e.target.checked; } }), ` then resume it with ${a.resume[3]}`) : null;
+}
+function decisionMore(n) {
+  const key = needKey(n), d = deciding[key];
+  if (!d) return null;
+  const a = d.action, cancel = h("button", { class: "btn", onclick: () => { delete deciding[key]; load(); } }, "Cancel");
+  if (d.mode === "busy") return h("div", { class: "more dim" }, d.label);
+  if (d.mode === "error") return h("div", { class: "more" }, errBox(d.error), h("div", { class: "row" }, cancel));
+  if (d.mode === "input") {
+    const box = h("textarea", { "data-keep": `answer ${key}`, placeholder: a.input, oninput: e => { d.text = e.target.value; },
+      onkeydown: e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && d.text.trim()) settle(n, a, [...a.argv, d.text.trim()]); } });
+    box.value = d.text;
+    setTimeout(() => { if (!document.activeElement || document.activeElement === document.body) box.focus(); });
+    return h("div", { class: "more" }, box, h("div", { class: "row" },
+      h("button", { class: "btn primary", onclick: () => d.text.trim() ? settle(n, a, [...a.argv, d.text.trim()]) : toast("Say something first: the agent reads it.", true) }, a.label),
+      cancel, resumeBox(d, a), h("span", { class: "dim" }, "Ctrl+Enter sends")));
+  }
+  if (d.mode === "confirm") {
+    const pv = d.preview || {}, shown = pv.preview || {};
+    const pairs = Object.entries(shown).filter(([k, v]) => !k.startsWith("_") && v != null && v !== "" && !(Array.isArray(v) && !v.length)
+      && !(k === "target" && String(v).startsWith("/")))  // the artifact's path here: its sha says which file
+      .map(([k, v]) => [k, Array.isArray(v) ? v.join(" · ") : typeof v === "object" ? JSON.stringify(v) : String(v)]);
+    const problems = pv.problems || [];
+    return h("div", { class: "more" }, pairs.length ? kv(pairs) : h("div", { class: "wrap", style: "white-space:pre-wrap;margin-bottom:8px" }, pv.text || ""),
+      problems.length ? h("div", { class: "problems" }, problems.map(x => h("div", {}, "✕ " + x))) : null,
+      h("div", { class: "row" }, h("button", { class: "btn primary", disabled: problems.length || null, onclick: () => settle(n, a, a.argv) }, a.label),
+        cancel, resumeBox(d, a)));
+  }
+  return null;
+}
+function needLine(n) {
+  const [kind, sym] = NEED_KIND[n.kind] || ["neutral", "·"];
+  const [bg, fg] = TINT[kind];
+  const refs = (n.refs || (n.ref ? [n.ref] : [])).filter(refAction);
+  const acts = n.who === "chore" ? [] : (n.actions || []);
+  return h("div", { class: `need ${n.who || ""}` }, h("span", { class: "icon", style: `background:${bg};color:${fg}`, "aria-hidden": "true", title: n.kind.replaceAll("_", " ") }, sym),
+    h("div", { class: "what wrap" }, n.what, n.age_s != null ? h("span", { class: "dim" }, ` · ${dur(n.age_s)}`) : null,
+      n.fix && !acts.length ? [h("code", {}, n.fix), copyBtn(n.fix)] : null,
+      refs.length ? h("div", { class: "refs" }, refs.slice(0, 16).map(r => h("button", { class: "btn small", title: `Open ${r}`, onclick: refAction(r) }, r)),
+        refs.length > 16 ? h("span", { class: "dim" }, `+${refs.length - 16}`) : null) : null),
+    h("div", { class: "actions" }, acts.map(a => needAction(n, a))), decisionMore(n));
+}
+function needsCard(items) {
+  const dec = items.filter(n => n.who === "decision"), chores = items.filter(n => n.who === "chore"), advice = items.filter(n => n.who === "advice");
+  if (!dec.length && !chores.length && !advice.length)
+    return [h("div", { class: "card needs clear" }, h("span", { class: "ok-dot", "aria-hidden": "true" }, "✓"), "Nothing needs you right now.")];
+  const sub = [dec.length ? `${dec.length} decision${dec.length === 1 ? "" : "s"}` : null, chores.length ? `${chores.length} chore${chores.length === 1 ? "" : "s"}` : null,
+    advice.length ? `${advice.length} to know` : null].filter(Boolean).join(" · ");
+  const card = h("div", { class: "card needs" });
+  if (dec.length) card.append(...dec.map(needLine));
+  else card.append(h("div", { class: "need" }, h("span", { class: "ok-dot", "aria-hidden": "true" }, "✓"), h("div", { class: "what dim" }, "No decisions waiting on you.")));
+  if (chores.length) {
+    const cmds = [...new Map(chores.flatMap(n => (n.actions || []).slice(0, 1)).map(a => [a.argv.join(" "), a])).values()];
+    card.append(h("div", { class: "group" }, "Chores", h("span", { style: "font-weight:400;text-transform:none;letter-spacing:0" }, "bookkeeping anyone may do, your agent included"),
+      cmds.length ? h("button", { class: "btn small", style: "margin-left:auto;font-family:inherit", title: cmds.map(a => "kx " + a.argv.join(" ")).join("\n"), onclick: async e => {
+        e.currentTarget.disabled = true;
+        for (const a of cmds) await doIt(a.argv);
+      } }, cmds.length === 1 ? cmds[0].label : "Do them") : null), ...chores.map(needLine));
+  }
+  if (advice.length) card.append(h("div", { class: "group" }, "To know"), ...advice.map(n => {
+    const el = needLine(n);
+    for (const a of n.actions || []) el.querySelector(".actions").append(h("button", { class: "btn", onclick: () => doIt(a.argv) }, a.label));
+    return el;
+  }));
+  return [h("h2", {}, "Needs you", h("span", { class: "h2sub" }, sub)), card];
+}
+// What changed since the person last looked (kx brief); "Got it" starts the next one from now.
+function sinceCard(b) {
+  const c = b.changes, lines = [];
+  const link = (ref, fn) => h("a", { class: "id", onclick: fn, title: `Open ${ref}` }, ref);
+  const line = (k, ...v) => lines.push(h("div", { class: "line" }, h("span", { class: "k" }, k), h("span", { class: "wrap" }, ...v)));
+  const r = c.runs, ended = r.done + r.failed.length;
+  if (ended) line("runs", `${ended} ended${r.failed.length ? `, ${r.failed.length} failed` : ""}`,
+    c.best ? [" · new best ", link(c.best.run, () => showRun(c.best.run)), ` ${score(c.best.value, c.best.se)}`, c.best.was ? h("span", { class: "dim" }, ` (was ${fmt(c.best.was.value)}, ${c.best.was.run})`) : null] : null);
+  if (c.scored.length) line("", ...c.scored.flatMap((x, i) => [i ? " · " : "", link(x.run, () => showRun(x.run)), ` ${fmt(x.value)} `, h("span", { class: "dim" }, `#${x.rank}/${x.of}`)]));
+  for (const f of r.failed.slice(0, 3)) line("", link(f.run, () => showRun(f.run)), h("span", { class: "dim" }, ` failed: ${f.error || f.hypothesis || ""}`));
+  c.tasks.forEach((t, i) => line(i ? "" : "tasks", link(t.id, () => showTask(t.id)), ` ${t.status}${t.result ? ", " + t.result : ""}: `, h("span", { class: "dim" }, t.outcome || t.title)));
+  if (c.tasks_added.length) line("new tasks", ...c.tasks_added.slice(0, 6).flatMap((t, i) => [i ? " · " : "", link(t.id, () => showTask(t.id)), ` ${t.title}`]));
+  c.findings.slice(0, 5).forEach((f, i) => line(i ? "" : "findings", h("strong", {}, f.id), " ", f.text));
+  if (c.findings_reviewed.length) line(c.findings.length ? "" : "findings", c.findings_reviewed.map(f => `${f.id} ${f.status}`).join(", "));
+  const subs = c.submissions.filter(s => s.public != null || s.status === "error" || s.sent);
+  if (subs.length) line("submissions", ...subs.flatMap((s, i) => [i ? " · " : "", link(s.id, () => showSub(s.id)), s.run ? ` (${s.run})` : "",
+    s.public != null ? ` scored ${fmt(s.public)}` : s.status === "error" ? ` failed: ${s.error || ""}` : " sent"]));
+  if (c.workers.length) line("workers", c.workers.map(w => `${w.worker} on ${w.task} ` + (w.stop ? `stopped: ${w.stop}` : w.code ? `exit ${w.code}` : "ended")).join(" · "));
+  const used = Object.entries(c.used || {});
+  if (used.length) line("used", used.map(([m, v]) => `${compact(v)} ${m.replaceAll("_", " ")}`).join(" · "));
+  const got = h("button", { class: "btn", style: "margin-left:10px;font-size:12px;padding:1px 9px", title: "kx brief --mark: the next one starts from now", onclick: () => doIt(["brief", "--mark"]) }, "Got it");
+  if (!lines.length) return [h("div", { class: "dim", style: "margin:0 0 10px" }, "Nothing new since you last looked, ", agoEl(b.since), ".")];
+  return [h("h2", {}, "Since you last looked", h("span", { class: "h2sub" }, agoEl(b.since)), got), h("div", { class: "card since" }, lines)];
+}
+// A note on a run or a task, for whoever works on it next (kx context lists the person's latest notes).
+const drafts = {};
+function noteForm(argv0, ref, placeholder) {
+  const k = `${COMP} note ${ref}`;
+  const box = h("textarea", { "data-keep": k, placeholder, oninput: e => { drafts[k] = e.target.value; },
+    onkeydown: e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(); } });
+  box.value = drafts[k] || "";
+  const send = () => { const t = (drafts[k] || "").trim(); if (!t) return; delete drafts[k]; doIt([...argv0, ref, t]); };
+  return h("div", { class: "form" }, h("h4", {}, "Your note"), box, h("div", { class: "row" }, h("button", { class: "btn", onclick: send }, "Add note"),
+    h("span", { class: "dim" }, "Agents read the latest notes first (kx context). Ctrl+Enter adds it.")));
+}
+function giveTask(t) {
+  const names = (COMPS.find(x => x.slug === COMP) || {}).workers || [];
+  if (!names.length || !["open", "waiting"].includes(t.status)) return null;
+  const sel = h("select", { "aria-label": "Worker" }, names.map(w => h("option", { value: w }, w)));
+  return h("div", { class: "form" }, h("h4", {}, "Give it to a worker"), h("div", { class: "row", style: "margin-top:0" }, sel,
+    h("button", { class: "btn primary", onclick: e => { e.currentTarget.disabled = true; doIt(["spawn", t.id, "-w", sel.value]); } }, "Start"),
+    h("span", { class: "dim" }, "kx spawn: its own worktree, in the background")));
+}
+function stopButton(w) {
+  let armed = false;
+  return h("button", { class: "btn small", style: "font-family:inherit", title: `kx stop ${w.id}`, onclick: e => {
+    e.stopPropagation();
+    if (!armed) { armed = true; e.currentTarget.textContent = "Stop it?"; setTimeout(() => { armed = false; }, 4000); return; }
+    doIt(["stop", w.id]);
+  } }, "Stop");
+}
+const newTask = { open: false, title: "", body: "", p: "0" };
+function newTaskForm() {
+  if (!newTask.open) return h("button", { class: "btn", onclick: () => { newTask.open = true; load(); } }, "New task");
+  const title = h("input", { type: "text", "data-keep": "new-task-title", placeholder: "What to try or find out", oninput: e => { newTask.title = e.target.value; } });
+  title.value = newTask.title;
+  const body = h("textarea", { "data-keep": "new-task-body", placeholder: "Why, and what would settle it (optional)", oninput: e => { newTask.body = e.target.value; } });
+  body.value = newTask.body;
+  const pr = h("select", { "aria-label": "Priority", onchange: e => { newTask.p = e.target.value; } }, [0, 1, 2, 3].map(v => h("option", { value: String(v), selected: newTask.p === String(v) || null }, `p${v}`)));
+  return h("div", { class: "card form" }, title, h("div", { style: "height:6px" }), body, h("div", { class: "row" },
+    h("button", { class: "btn primary", onclick: () => {
+      if (!newTask.title.trim()) return toast("A task needs a title.", true);
+      const argv = ["task", "add", newTask.title.trim(), ...(newTask.body.trim() ? ["--body", newTask.body.trim()] : []), "-p", newTask.p];
+      Object.assign(newTask, { open: false, title: "", body: "", p: "0" });
+      doIt(argv);
+    } }, "Add task"), pr, h("button", { class: "btn", onclick: () => { newTask.open = false; load(); } }, "Cancel")));
+}
+
 async function renderStatus() {
-  const [st, hist, lbd] = await Promise.all([api("status"),
+  const [st, br, hist, lbd] = await Promise.all([api("status"), api("brief").catch(e => { if (e.offline) throw e; return null; }),
     api("history" + (state.histProtocol ? `?protocol=${encodeURIComponent(state.histProtocol)}` : "")).catch(e => { if (e.offline) throw e; return { protocol: null, protocols: [], points: [] }; }),
     api("leaderboard" + (state.lbProtocol ? `?protocol=${encodeURIComponent(state.lbProtocol)}` : "")).catch(e => { if (e.offline) throw e; return null; })]);
   const out = [];
-  setCount("status", st.needs_you.length);
-  if (st.needs_you.length) {
-    out.push(h("h2", {}, "Needs you", h("span", { class: "h2sub" }, `${st.needs_you.length} item${st.needs_you.length === 1 ? "" : "s"}`)));
-    const needs = h("div", { class: "card needs" });
-    for (const n of st.needs_you) {
-      const [kind, sym] = NEED_KIND[n.kind] || ["neutral", "·"];
-      const [bg, fg] = TINT[kind];
-      const acts = h("div", { class: "actions" });
-      const refs = (n.refs || (n.ref ? [n.ref] : [])).filter(refAction);
-      needs.append(h("div", { class: "need" }, h("span", { class: "icon", style: `background:${bg};color:${fg}`, "aria-hidden": "true", title: n.kind.replaceAll("_", " ") }, sym),
-        h("div", { class: "what wrap" }, n.what, n.age_s != null ? h("span", { class: "dim" }, ` · ${dur(n.age_s)}`) : null,
-          n.fix ? [h("code", {}, n.fix), copyBtn(n.fix)] : null,
-          refs.length ? h("div", { class: "refs" }, refs.slice(0, 16).map(r => h("button", { class: "btn small", title: `Open ${r}`, onclick: refAction(r) }, r)),
-            refs.length > 16 ? h("span", { class: "dim" }, `+${refs.length - 16}`) : null) : null), acts));
-    }
-    out.push(needs);
-  } else {
-    out.push(h("div", { class: "card needs clear" }, h("span", { class: "ok-dot", "aria-hidden": "true" }, "✓"), "Nothing needs you right now."));
-  }
+  setCount("status", st.needs_you.filter(n => n.who !== "advice").length);
+  if (br) out.push(...sinceCard(br));
+  out.push(...needsCard(st.needs_you));
 
   const res = st.results, ref = res.reference, best = res.best[0];
   const sub = st.submissions, sl = sub.slots, lb = sub.lb;
@@ -1427,7 +1614,7 @@ async function renderStatus() {
       runs.length ? table([["run"], ["progress"], ["elapsed", "num"], ["hypothesis"]], runs.map(r => [h("span", { class: "id" }, r.run, r.host ? h("span", { class: "dim" }, ` @${r.host}`) : ""),
         r.percent != null ? h("div", {}, h("div", { class: "progress" }, h("div", { style: `width:${r.percent}%` })), h("div", { class: "dim" }, `${r.percent.toFixed(0)}%${r.eta_s ? " · eta " + dur(r.eta_s) : ""}`)) : badge("running", "active"),
         dur(r.elapsed_s), h("span", { class: "clamp" }, r.hypothesis || "")]), i => showRun(runs[i].run)) : null,
-      workers.length ? table([["worker"], ["task"], ["tokens", "num"], ["doing"]], workers.map(w => [badge(w.agent, "active"), h("span", { class: "id" }, `${w.task}`), compact((w.tokens_in || 0) + (w.tokens_out || 0)), h("span", { class: "dim clamp" }, w.last_action || "")])) : null));
+      workers.length ? table([["worker"], ["task"], ["tokens", "num"], ["doing"], [""]], workers.map(w => [badge(w.agent, "active"), h("span", { class: "id" }, `${w.task}`), compact((w.tokens_in || 0) + (w.tokens_out || 0)), h("span", { class: "dim clamp" }, w.last_action || ""), stopButton(w)])) : null));
   }
   left.push(h("h2", {}, "Latest submissions", h("span", { class: "h2sub" }, ext(L().submissions, "on Kaggle", "Your submissions on Kaggle"))));
   left.push(h("div", { class: "card flush" }, sub.recent.length ? table([["sub"], ["run"], ["status"], ["public", "num"], ["when", "num"], [""]],
@@ -1439,7 +1626,7 @@ async function renderStatus() {
   right.push(h("h2", {}, "Tasks", h("span", { class: "h2sub" }, `${st.tasks.counts.active} active · ${st.tasks.counts.waiting} waiting · ${st.tasks.counts.open} open`)));
   right.push(h("div", { class: "card flush" }, tl.length ?
     table([["task"], ["title", "one"], ["state"]], tl.map(t => {
-      const note = t.status === "waiting" ? `waits on ${t.waiting_on}` : (t.last_note ? t.last_note.text : "");
+      const note = t.status === "waiting" ? waits(t) : (t.last_note ? t.last_note.text : "");
       return [h("span", { class: "id" }, `${t.id}`),
         h("span", { title: note ? `${t.title}\n${note}` : t.title }, h("span", { style: "font-weight:500" }, t.title), note ? h("span", { class: "dim" }, ` · ${note}`) : null),
         badge(t.status === "open" ? "ready" : t.status, TASK_KIND[t.status])];
@@ -1720,7 +1907,9 @@ async function renderRuns() {
 
 function taskKind(t) { return t.status === "done" ? ({ positive: "good", negative: "critical", inconclusive: "neutral" }[t.result] || "good") : TASK_KIND[t.status]; }
 function taskBadge(t) { return badge(t.status + (t.result ? ` · ${t.result}` : ""), taskKind(t)); }
-function taskLatest(t) { return t.status === "waiting" ? `waits on ${t.waiting_on}` : (t.blocked_by && t.blocked_by.length ? `after ${t.blocked_by.join(", ")}` : (t.last_note ? t.last_note.text.slice(0, 160) : (t.outcome || "").slice(0, 160))); }
+// what a waiting task waits on, or, once the person settled it (kx approve / kx answer), why it can go on
+function waits(t) { if (t.status !== "waiting") return null; const on = t.waiting_on || ""; return on.startsWith("answered:") ? `can go on: ${on.slice(9).trim()}` : `waits on ${on}`; }
+function taskLatest(t) { return t.status === "waiting" ? waits(t) : (t.blocked_by && t.blocked_by.length ? `after ${t.blocked_by.join(", ")}` : (t.last_note ? t.last_note.text.slice(0, 160) : (t.outcome || "").slice(0, 160))); }
 
 async function renderTasks() {
   const rows = await api("tasks" + (state.tasksAll ? "?all=1" : ""));
@@ -1729,9 +1918,11 @@ async function renderTasks() {
   const count = h("span", { class: "count-note" });
   const texts = rows.map(t => `${t.id} ${t.title} ${t.status} ${t.owner || ""} ${taskLatest(t) || ""} ${t.result || ""}`.toLowerCase());
   const f = state.tasksMode === "list" ? rowFilter({ key: "taskQuery", placeholder: "filter tasks: words, T12, owner", texts, rows: () => main.querySelectorAll(".tasks-list tbody tr"), count }) : null;
-  const out = [h("div", { class: "filters" }, mode, f ? f.input : null, count, h("label", {}, h("input", { type: "checkbox", checked: state.tasksAll || null, onchange: e => { state.tasksAll = e.target.checked; load(); } }), " include done and dropped"))];
+  const form = newTaskForm();
+  const out = [h("div", { class: "filters" }, mode, f ? f.input : null, count, h("label", {}, h("input", { type: "checkbox", checked: state.tasksAll || null, onchange: e => { state.tasksAll = e.target.checked; load(); } }), " include done and dropped"),
+    newTask.open ? null : h("span", { style: "margin-left:auto" }, form)), newTask.open ? form : null];
   if (f) setTimeout(f.apply);
-  if (!rows.length) out.push(h("div", { class: "card" }, h("div", { class: "empty" }, "No open tasks. Add one: kx task add \"...\"")));
+  if (!rows.length) out.push(h("div", { class: "card" }, h("div", { class: "empty" }, "No open tasks. Add one with New task (or kx task add \"...\").")));
   else if (state.tasksMode === "graph") out.push(h("div", { class: "card" }, taskGraph(rows)),
     h("div", { class: "dim", style: "font-size:12px;margin-top:6px" }, "Each task sits right of the tasks it depends on; a dashed link is a dependency not done yet.",
       state.tasksAll ? "" : " Done and dropped tasks are hidden, with their links."));

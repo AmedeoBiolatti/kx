@@ -5,6 +5,7 @@ is beside the list, which keeps its place."""
 from __future__ import annotations
 
 from kx.ledger.config import KxError
+from kx.board.decide import waits
 from kx.views.nextcode import Ctx, Go, footer, header, run_kx, states
 from kx.views.nextcode.widgets import (HOST, button, chart, checkbox, col, esc, label, md, row, select, sidebar, table,
                                        text_input, trunc)
@@ -80,7 +81,7 @@ def task_card(task: str, tight: bool) -> list[dict]:
         t = run_kx(["task", "show", task])
     except KxError as e:
         return [row("card-head", md("card-title", f"**{esc(task)}**: {esc(e)}"), button("close", "Close"))]
-    meta = [states.task(t)[0], f"p{t['priority']}", t.get("owner"), t.get("waiting_on") and f"waits on {esc(t['waiting_on'])}",
+    meta = [states.task(t)[0], f"p{t['priority']}", t.get("owner"), esc(waits(t)) if waits(t) else None,
             t.get("depends") and "depends on " + ", ".join(str(d) for d in t["depends"]), t.get("branch") and f"branch {esc(t['branch'])}",
             f"updated {ago(t['updated'])} ago"]
     out = [row("card-head", md("card-title", f"### {t['id']} · {esc(t['title'])}\n\n" + " · ".join(m for m in meta if m)),

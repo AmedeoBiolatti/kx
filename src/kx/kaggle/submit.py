@@ -322,6 +322,8 @@ def sync_submissions(store: Store, remote: list[dict] | None = None, games: bool
     for r in store.all("SELECT id, public, episodes FROM submissions WHERE public IS NOT NULL"):
         ladder.record_score(store, r["id"], r["public"], r["episodes"])
     store.set_setting("synced", now())
+    from kx import notify
+    notify.quietly(store)  # a submission scored or failed
     return {"remote": len(remote), "new": new, "updated": updated}
 
 

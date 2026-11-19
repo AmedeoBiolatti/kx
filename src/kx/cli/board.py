@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from kx.board import findings, tasks
+from kx.board import decide, findings, tasks
 from kx.cli.common import Out, S, task_here
 from kx.guard import actors
 from kx.ledger.config import KxError
@@ -15,8 +15,8 @@ def _task_text(t: dict, notes: list[dict] | None = None) -> str:
     head = bold(f"{t['id']} {t['title']}") + dim(f"  {t['status']}" + (f" · {t['result']}" if t["result"] else "")
                                                    + (f" · {t['owner']}" if t["owner"] else "") + f" · p{t['priority']}")
     lines = [head]
-    if t.get("waiting_on"):
-        lines.append(f"  waiting on: {t['waiting_on']}")
+    if t.get("waiting_on") and (w := decide.waits(t)):
+        lines.append(f"  {w}")
     if t["depends"]:
         lines.append(f"  depends on: {', '.join(t['depends'])}")
     if t["branch"]:
@@ -38,7 +38,7 @@ def cmd_task(a):
             trows = []
             for t in rows:
                 state = t["status"] + (f"/{t['result']}" if t["result"] else "")
-                why = (t["waiting_on"] if t["status"] == "waiting" else
+                why = (decide.waits(t) if t["status"] == "waiting" else
                        f"after {', '.join(t['blocked_by'])}" if t["blocked_by"] else
                        (t["last_note"]["text"] if t["last_note"] else ""))
                 trows.append([t['id'], f"p{t['priority']}", state, t["owner"] or "", trunc(t["title"], 60), why])
@@ -84,6 +84,8 @@ def cmd_task(a):
             return Out(t, f"noted on {t['id']}")
         if act == "wait":
             t = tasks.wait(st, t_id, a.on, a.note or "")
+            from kx import notify
+            notify.quietly(st)  # parked on the person: they hear of it
             return Out(t, f"{t['id']} waits on {a.on}")
         if act == "done":
             t = tasks.finish(st, t_id, a.result, a.outcome)

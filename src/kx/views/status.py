@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from kx.board import findings, tasks
+from kx.board import decide, findings, tasks
 from kx.guard import budgets
 from kx.kaggle import competition, ladder, submit
 from kx.ledger.store import Store, age_s, loads, parse_ts
@@ -59,21 +59,25 @@ def needs_you(store: Store) -> list[dict]:
                     "what": f"{s['id']} ({s['run_id'] if s['run_id'] else 'external'}) failed on Kaggle: "
                             f"{s['error'] or 'no reason given'}", "fix": "kx subs"})
     for t in tasks.listing(store):
+        on = t["waiting_on"] or ""
         if t["status"] == "waiting" and (why := tasks.waiting_resolved(store, t)):
+            who = decide.resumer(store, t["id"])
             out.append({"kind": "resume_task", "ref": t['id'], "age_s": age_s(t["updated"]),
-                        "what": f"{t['id']} waited for {t['waiting_on']}: {why}, it can go on",
-                        "fix": f"kx task start {t['id']}  (or kx spawn {t['id']} ...)"})
-        elif t["status"] == "waiting" and ((on := t["waiting_on"] or "").startswith("kx ")
-                                           or any(w in on.lower() for w in ("human", "you", "manual"))):
+                        "what": f"{t['id']} can go on: {why}" if decide.resolved(on) is not None
+                        else f"{t['id']} waited for {on}: {why}, it can go on",
+                        "fix": f"kx spawn {t['id']} -w {who}" if who else f"kx task start {t['id']}  (or kx spawn {t['id']} ...)"})
+        elif decide.asks_person(t):  # a worker's `kx submit ... --yes`, or a question: kx approve / kx answer
+            argv = decide.command(on)
             out.append({"kind": "task_waits_on_you", "ref": t['id'], "age_s": age_s(t["updated"]),
-                        "what": f"{t['id']} waits on you: {on}",  # a worker's `kx submit ... --yes`: run it yourself
-                        "fix": on if on.startswith("kx ") else f"kx task show {t['id']}"})
+                        "what": f"{t['id']} waits on you: " + (decide.describe(argv, (t["owner"] or "").split("@")[0] or None) if argv else on),
+                        "asker": (t["owner"] or "").split("@")[0] or None, "command": on if on.startswith("kx ") else None,
+                        "fix": on if on.startswith("kx ") else f'kx answer {t["id"]} "..."'})
     for w in store.all("SELECT w.* FROM workers w LEFT JOIN tasks t ON t.id=w.task WHERE w.finished IS NOT NULL "
                        "AND w.finished >= ? AND COALESCE(w.stop, '') != 'asked' AND (w.code != 0 OR w.stop IS NOT NULL) "
                        "AND COALESCE(t.status, '') NOT IN ('done', 'dropped') "
                        "AND NOT EXISTS (SELECT 1 FROM workers w2 WHERE w2.task=w.task AND w2.started > w.started) "
                        "ORDER BY w.finished DESC LIMIT 5", (cutoff(days=1),)):
-        out.append({"kind": "worker_failed", "ref": w["id"], "age_s": age_s(w["finished"]),
+        out.append({"kind": "worker_failed", "ref": w["id"], "task": w["task"], "age_s": age_s(w["finished"]),
                     "what": f"worker {w['agent']} on {w['task']} ended " + (f"(stopped: {w['stop']})" if w["stop"] else f"with exit {w['code']}"),
                     "fix": f"kx workers --show {w['id']}"})
     from kx.ledger.sync import LOST_KEEP_S
@@ -98,7 +102,7 @@ def needs_you(store: Store) -> list[dict]:
                     "fix": "kx sync"})
     ref = reference(store)
     if ref["source"] == "inferred":
-        out.append({"kind": "no_reference", "ref": None, "age_s": None,
+        out.append({"kind": "no_reference", "ref": None, "protocol": ref["name"], "age_s": None,
                     "what": f"no reference protocol set: ranking under '{ref['name']}' (the most used lately)",
                     "fix": f"kx protocol use {ref['name']}  (kx protocol list)"})
     # one line per kind, whatever the count: advice must not bury what needs you
@@ -134,7 +138,8 @@ def needs_you(store: Store) -> list[dict]:
             out.append({"kind": "budget", "ref": b["key"], "age_s": None,
                         "what": f"budget {b['scope']} {b['key']} is used up ({budgets.fmt(b['metric'], b['used'])}/"
                                 f"{budgets.fmt(b['metric'], b['cap'])}); {b['frees_up']}", "fix": "kx budget"})
-    return out
+    from kx.views import actions
+    return actions.decorate(store, out)
 
 
 def results(store: Store, top: int = 3, recent: int = 3) -> dict:
@@ -235,7 +240,7 @@ def render_status(st: dict, short: bool = False) -> str:
     out.append(bold("TASKS") + dim(f"  {c['active']} active · {c['waiting']} waiting · {c['open']} open"))
     trows = []
     for t in st["tasks"]["active"]:
-        what = t["waiting_on"] if t["status"] == "waiting" else (t["last_note"]["text"] if t["last_note"] else "")
+        what = decide.waits(t) if t["status"] == "waiting" else (t["last_note"]["text"] if t["last_note"] else "")
         trows.append([t['id'], t["status"], t["owner"] or "", trunc(t["title"], 50), what])
     for t in st["tasks"]["ready"]:
         trows.append([t['id'], "ready", f"p{t['priority']}", trunc(t["title"], 50), ""])
@@ -303,7 +308,7 @@ RULES = [
 ]
 
 
-def context(store: Store, actor, task_id: int | None = None) -> dict:
+def context(store: Store, actor, task_id: str | None = None) -> dict:
     st = status(store)
     t = None
     if task_id:
@@ -340,8 +345,25 @@ def context(store: Store, actor, task_id: int | None = None) -> dict:
         "findings": [{"id": f['id'], "status": f["status"], "tags": f["tags"], "text": f["text"]}
                      for f in findings.listing(store, limit=8)],
         "needs_you": st["needs_you"] if not actor.worker else [],
+        "from_person": person_notes(store),
         "rules": RULES + project_rules(store.comp),
     }
+
+
+PERSON_DAYS = 7
+
+
+def person_notes(store: Store, n: int = 6) -> list[dict]:
+    """The latest notes on runs and tasks by the person (or the agent they talk to), not by workers or kx: how they
+    steer whoever starts next. A run's notes count once it has ended (before, they are the run's own, r.note)."""
+    agents = list(store.comp.workers) + ["kx"]
+    marks = ",".join("?" * len(agents))
+    rows = store.all(f"SELECT task ref, ts, author, text FROM task_notes WHERE ts >= ? AND COALESCE(author, '') "
+                     f"NOT IN ({marks}) UNION ALL SELECT n.run_id, n.ts, n.author, n.text FROM notes n "
+                     f"JOIN runs r ON r.id=n.run_id WHERE n.ts >= ? AND n.ts > r.finished AND n.text NOT LIKE 'kx %' "
+                     f"AND COALESCE(n.author, '') NOT IN ({marks}) ORDER BY ts DESC LIMIT ?",
+                     (cutoff(PERSON_DAYS), *agents, cutoff(PERSON_DAYS), *agents, n))
+    return [dict(r) for r in rows]
 
 
 def project_rules(comp) -> list[str]:
@@ -404,6 +426,9 @@ def render_context(cx: dict) -> str:
         out += ["", "## Recent findings (kx finding show F<n> for the full text)"]
         out += [f"- {f['id']} [{f['status']}{'; ' + ','.join(f['tags']) if f['tags'] else ''}] {trunc(f['text'], 180)}"
                 for f in cx["findings"]]
+    if cx.get("from_person"):
+        out += ["", "## Latest notes from the person (and the agent they talk to)"]
+        out += [f"- {ago(x['ts'])} ago on {x['ref']}: {trunc(x['text'], 240)}" for x in cx["from_person"]]
     if cx["needs_you"]:
         out += ["", "## Waiting on the person driving"]
         out += [f"- {trunc(x['what'], 160)}  ({x['fix']})" for x in cx["needs_you"]]

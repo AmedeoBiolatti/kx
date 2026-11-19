@@ -12,11 +12,17 @@ from kx.views.text import ago, dim, dur, num, table
 
 
 def cmd_submit(a):
+    from kx.board import decide
     from kx.kaggle import submit
     with S() as st:
         res = submit.submit(st, actors.current(), a.run, a.message, why=a.why, expect=a.expect, yes=a.yes, argv=argv(),
                             file=a.file, kernel_version=a.kernel_version, early=a.early, task=task_here(st))
-    return Out(res, f"submitted {res['submission']} ({res['run']})\n{res['output']}\nresults: kx sync, then kx subs")
+        sid, run_id = res["submission"], st.resolve(res["run"])
+        res["settled"] = decide.settle(st, ("submit",), run_id, f"{sid} sent", then=f"submission:{sid}")
+        if res["settled"]:  # the submission is for the task that asked for it
+            st.update("submissions", {"task": res["settled"][0]}, id=sid, task=None)
+    after = f"\n{', '.join(res['settled'])} now wait{'s' if len(res['settled']) == 1 else ''} on its score" if res["settled"] else ""
+    return Out(res, f"submitted {sid} ({res['run']})\n{res['output']}\nresults: kx sync, then kx subs (or kx wait {sid}){after}")
 
 
 def _ladder_lines(lad: dict) -> list[str]:
@@ -121,7 +127,8 @@ def cmd_kernel(a):
         out = kernels.push_kernel(st, run_id)
         if cost:
             budgets.charge(st, who, "kaggle_gpu_hours", hours, run_id)
-    return Out({"output": out}, out)
+        settled = _settle_push(st, "kernel", run_id)
+    return Out({"output": out, "settled": settled}, out + _settled_line(settled))
 
 
 def cmd_dataset(a):
@@ -132,7 +139,20 @@ def cmd_dataset(a):
         prev = kernels.push_dataset(st, run_id, a.path, message=a.message or "", create=a.create, dry_run=True)
         gate(who, argv(), f"{prev['action']} of dataset {prev['dataset']} from {run_id}", prev, yes=a.yes, task=task_here(st))
         out = kernels.push_dataset(st, run_id, a.path, message=a.message or "", create=a.create)
-    return Out({"output": out}, out)
+        settled = _settle_push(st, "dataset", run_id)
+    return Out({"output": out, "settled": settled}, out + _settled_line(settled))
+
+
+def _settle_push(st, kind: str, run_id: str) -> list[str]:
+    """Tasks that waited on this push (a worker's request) can go on."""
+    from kx.board import decide
+    p = st.one("SELECT target, version FROM pushes WHERE kind=? AND run_id=? ORDER BY id DESC LIMIT 1", (kind, run_id))
+    what = f"{kind} {p['target']}" + (f" version {p['version']}" if p and p["version"] else "") if p else f"{kind} of {run_id}"
+    return decide.settle(st, (kind, "push"), run_id, f"{what} pushed")
+
+
+def _settled_line(settled: list[str]) -> str:
+    return f"\n{', '.join(settled)} can go on (they waited on this push)" if settled else ""
 
 
 def register(cmd, group, action):

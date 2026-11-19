@@ -33,8 +33,16 @@ The competition itself is described in `docs/competition.md`.
 Record every run with kx, score it under the reference protocol, write conclusions as findings, and finish tasks
 with an outcome, negative ones included. Submissions and kernel/dataset pushes need `--yes` after the preview:
 ask the person you work with before passing it. Never submit or push with the kaggle CLI directly.
+
+Working with a person in their terminal (not a worker), you run kx for them: they should not need to. A session
+starts with `kx brief` (what happened since they last looked, what needs them); tell them what matters in a few
+lines, do the chores yourself, and settle their decisions with them: `kx approve T7` shows what a task waits on,
+`kx approve T7 --yes` runs it once they say so, `kx answer T7 "..."` passes on their reply.
 <!-- kx:end -->
 """
+
+# Claude Code: a session starts with the person's brief (what changed, what needs them); nothing for workers
+HOOK = "kx brief --hook"
 
 # Claude Code: kx commands run freely; the raw Kaggle CLI would bypass kx's checks, so it asks first.
 ALLOW = ["Bash(kx:*)"]
@@ -175,8 +183,11 @@ def write_agent_files(root: Path) -> list[str]:
     allow = perms.setdefault("allow", [])
     allow.extend(a for a in ALLOW if a not in allow)
     perms["ask"] = perms.get("ask", []) + [a for a in ASK if a not in perms.get("ask", [])]
+    starts = cur.setdefault("hooks", {}).setdefault("SessionStart", [])
+    if not any(h.get("command") == HOOK for m in starts for h in m.get("hooks", [])):
+        starts.append({"matcher": "startup|resume|clear", "hooks": [{"type": "command", "command": HOOK}]})
     settings.write_text(json.dumps(cur, indent=2) + "\n")
-    done.append("kx permissions in .claude/settings.json")
+    done.append("kx permissions and the session brief hook in .claude/settings.json")
     gi = root / ".gitignore"
     lines = gi.read_text().splitlines() if gi.exists() else []
     missing = [g for g in GITIGNORE if g not in lines]

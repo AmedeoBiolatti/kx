@@ -1,7 +1,9 @@
 """`kx dashboard`: a local web page over the same data as the CLI's --json output.
 
-Each API call runs the matching kx command in-process (so the page and the terminal never disagree). The page only
-reads, except `kx sync` (read-only on Kaggle), which needs the per-process token embedded in the page.
+Each API call runs the matching kx command in-process (so the page and the terminal never disagree). What the page
+changes goes through POST, with the per-process token embedded in the page: `kx sync` (read-only on Kaggle), and
+/api/do, which runs the actions kx lists for what needs the person (kx approve, kx answer, kx spawn, ...), notes and
+new tasks: only the command lines kx.views.actions.allowed accepts.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ ROUTES = {  # path -> kx argv builder from the query string
     "subs": lambda q: ["subs", "-n", q.get("n", "30")],
     "workers": lambda q: ["workers", "--all"],
     "budget": lambda q: ["budget"],
+    "brief": lambda q: ["brief"] + (["--hours", q["hours"]] if q.get("hours") else []),
 }
 
 
@@ -51,23 +54,20 @@ def need(q: dict, key: str) -> str:
 TRIM = {  # route -> what the page reads of the command's data
     "protocols": lambda d: {**d, "protocols": [{k: v for k, v in p.items() if k != "spec"} for p in d["protocols"]]},
 }
-_parser = None
 
 
 def run_kx(argv: list[str]):
-    """Run a kx command in-process and return its data (what --json prints)."""
-    global _parser
-    if _parser is None:  # building it takes longer than most commands (callers hold LOCK)
-        from kx.cli.main import build_parser
-        _parser = build_parser()
+    """Run a kx command in-process and return its data (what --json prints). Callers hold LOCK."""
+    from kx.cli.main import call
     err = io.StringIO()
     try:
         with redirect_stderr(err):
-            a = _parser.parse_args(argv)
-            out = a.func(a)
-    except SystemExit:  # argparse refuses the arguments (a bad ?n=): an error page, not a dropped connection
-        lines = [x for x in err.getvalue().strip().splitlines() if x.strip()]
-        raise KxError(lines[-1] if lines else f"bad request: kx {' '.join(argv)}") from None
+            out = call(argv)
+    except KxError as e:
+        if e.code == 2:  # argparse refused the arguments (a bad ?n=): its reason, not "bad usage"
+            lines = [x for x in err.getvalue().strip().splitlines() if x.strip()]
+            raise KxError(lines[-1] if lines else f"bad request: kx {' '.join(argv)}") from None
+        raise
     return out.data if out is not None else None
 
 
@@ -198,6 +198,7 @@ def describe(name: str, root: Path) -> dict:
                                                      "GROUP BY target ORDER BY last DESC")]
         return {"slug": name, "path": str(root), "title": comp.slug, "kind": comp.kind, "mode": comp.mode,
                 "metric": comp.metric, "direction": comp.direction, "days_left": dl["days_left"],
+                "workers": list(comp.workers),
                 "links": competition.links(comp),
                 "datasets": [{"ref": d, "url": competition.dataset_url(d)} for d in datasets]}
     except Exception as e:  # noqa: BLE001 - a broken competition still appears in the picker, with why
@@ -294,13 +295,30 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         parts = u.path.strip("/").split("/")
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        if parts[:2] != ["api", "sync"]:
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}") if n <= 1 << 20 else None
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return self._json(400, {"ok": False, "error": "the body must be a JSON object"})
+        if parts[:2] not in (["api", "sync"], ["api", "do"]):
             return self._json(404, {"ok": False, "error": "not found"})
         try:
             root = self._root(q)
         except KxError as e:
             return self._json(400, {"ok": False, "error": str(e), "fix": e.fix})
+        if parts[:2] == ["api", "do"]:  # what the person does from the page: only what actions.allowed accepts
+            from kx.views.actions import execute
+            try:
+                with LOCK:
+                    os.chdir(root)
+                    with redirect_stderr(io.StringIO()):
+                        return self._json(200, execute(body.get("argv")))
+            except KxError as e:
+                return self._json(400, {"ok": False, "error": str(e), "fix": e.fix, "code": e.code})
+            except Exception as e:  # noqa: BLE001
+                return self._json(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})
         if not SYNCING.acquire(blocking=False):
             return self._json(409, {"ok": False, "error": "a kx sync is already running"})
         try:  # read-only on Kaggle: submissions, scores, a leaderboard snapshot

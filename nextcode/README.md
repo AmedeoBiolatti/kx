@@ -3,7 +3,9 @@
 A [NextCode](https://github.com/AmedeoBiolatti/nextcode) extension: kx's web dashboard as one native editor tab,
 **Dashboard** (palette: **Open kx: Dashboard**), with its pages as tabs, each refreshed on its own:
 
-- **Overview**: what needs you (with the command that fixes it), best local and public score, submission slots and
+- **Overview**: what changed since you last looked (Got it starts the next one from now), what needs you with
+  buttons that settle it (Send… shows the preview, then Send; Decline… and Answer… open a field; Resume with, Merge;
+  Do them for the chores), best local and public score, submission slots and
   what is running as tiles, the score over time (protocol picker; click a point to open its run), any reported metric
   over runs, the leaderboard over time and local against public score, running runs, latest submissions, tasks and
   budgets. A task or submission opens from its row.

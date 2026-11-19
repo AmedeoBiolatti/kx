@@ -553,3 +553,34 @@ def test_training_filters_and_keeps_each_run_in_its_color(comp, capsys, api):
     assert page(p)["runs"] == ["r0001"]
     p = event(capsys, p, "status", "change", {"tag": "-", "status": "failed"}, value="failed")
     assert page(p)["listed"] == ["r0001"] and "pick-found" not in ids(p)  # no failed run
+
+
+def test_the_overview_settles_what_needs_you(comp, fake_kaggle, capsys, monkeypatch, api):
+    """The person's decisions as buttons: a preview with Send, a field for an answer; chores in one go; Got it."""
+    from conftest import submittable
+    from test_decide import worker_asks
+
+    from kx.ledger.store import age_s
+    r = submittable(comp)
+    code, t = run_kx("task", "add", "submit it", capsys=capsys)
+    code, q = run_kx("task", "add", "folds", capsys=capsys)
+    worker_asks(monkeypatch, capsys, "submit", r.name, "-m", "x", "--why", "best", "--yes", task=t["id"])
+    run_kx("task", "wait", q["id"], "--on", "person: 5 or 10 folds?", capsys=capsys)
+    p = open_(capsys, "overview")
+    w = ids(p)
+    send, answer = f"do-task_waits_on_you_{t['id']}.0", f"do-task_waits_on_you_{q['id']}.0"
+    assert w[send]["text"] == "Send…" and w[answer]["text"] == "Answer…" and w["seen"]["text"] == "Got it"
+    assert any("w1 asks to submit" in x.get("text", "") for x in w.values())
+    p = event(capsys, p, send, "click")  # the preview first, nothing sent
+    assert r.name in ids(p)["decide-preview"]["text"] and not fake_kaggle.sent
+    p = event(capsys, p, "decide-ok", "click")
+    assert len(fake_kaggle.sent) == 1 and "now waits on submission:S1" in ids(p)["flash"]["text"]
+    assert send not in ids(p) and "decide" not in ids(p)
+    p = event(capsys, p, answer, "click")
+    assert ids(p)["decide-text"]["type"] == "text-input"
+    p = event(capsys, p, "decide-text", "submit", {"decide-text": "10, stratified"})
+    code, task = run_kx("task", "show", q["id"], capsys=capsys)
+    assert task["waiting_on"].endswith("replied: 10, stratified") and "can go on" in ids(p)["flash"]["text"]
+    p = event(capsys, p, "seen", "click")  # Got it: the next brief starts from now
+    code, b = run_kx("brief", capsys=capsys)
+    assert age_s(b["since"]) < 30

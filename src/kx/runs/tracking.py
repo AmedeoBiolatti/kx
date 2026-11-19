@@ -268,6 +268,8 @@ def end(act: _Active, error: BaseException | str | None = None):
         if act.gpus:
             hours = act.gpus * (time.monotonic() - act.started) / 3600
             budgets.charge(store, actors.current(), "gpu_hours", round(hours, 4), r.name)
+        from kx import notify
+        notify.quietly(store)  # a new best
     finally:
         store.close()
     if ingest_error is not None:

@@ -21,9 +21,14 @@ and brings the logs, nothing else. A worker (`KX_AGENT` set) cannot: say the sum
 
 ## 3. Gather (keep what is newer than the time)
 
+Start from `kx brief --json` (since the person last looked) or `kx brief --hours H --json`: `changes` has the runs
+that ended, a new best, tasks finished and added, findings, submissions sent and scored, workers that ended and what
+was spent; `needs_you[]` says whose each item is (`who`: decision, chore, advice) and the `actions` that settle it.
+Then fill in from:
+
 | what | run | fields |
 |---|---|---|
-| what needs the person now | `kx status --json` | `needs_you[]`: `what`, `fix`; `running` |
+| what needs the person now | `kx status --json` | `needs_you[]`: `what`, `who`, `actions`, `fix`; `running` |
 | runs started or finished | `kx runs -n 500 --json` | `created`, `finished`, `status`, `author`, `host`, `task`, `hypothesis`, `score` |
 | did the best change | `kx board --json` | rows whose run started after the time; `vs_best.verdict` |
 | why a run failed | `kx show R --json` | `error` (its first line is usually enough) |
@@ -42,8 +47,9 @@ and brings the logs, nothing else. A worker (`KX_AGENT` set) cannot: say the sum
 3. **What was learned**: new findings in one line each, with their evidence runs; withdrawn ones too.
 4. **Tasks**: finished (with their result), started, waiting (on what).
 5. **Submissions**: sent, scored, slots left today.
-6. **Needs you**: each item of `needs_you` with the exact command that resolves it, and any decision the above
-   raises (a promising run to submit, a direction to stop).
+6. **Needs you**: the decisions first, each with what settles it (`kx approve T7` shows a worker's request, `--yes`
+   once they say yes; `kx answer T7 "their words"`); do the chores yourself; then any decision the above raises (a
+   promising run to submit, a direction to stop).
 
 When much happened, add one diagram: what ran by task and day, as a Mermaid `gantt` or a small `flowchart` (patterns
 in the kx-explain skill's `diagrams.md`). Full ids everywhere (`r0012-fluent-sun`). Leave out what did not change.

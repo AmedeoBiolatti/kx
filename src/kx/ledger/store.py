@@ -246,7 +246,8 @@ LOGGED = ("runs", "protocols", "scores", "notes", "tags", "findings", "finding_t
           "submissions", "submission_episodes", "submission_scores", "pushes", "lb_snapshots", "usage", "settings")
 LOCAL_COLUMNS = {"runs": ("heartbeat",), "submissions": ("episodes_at",)}
 LOCAL_SETTINGS = ("synced", "lb_bounds", "share", "clock", "last_entry", "lost_claims",
-                  "current_task")  # current_task: {owner: the task they started last here}
+                  "current_task",  # current_task: {owner: the task they started last here}
+                  "seen", "notified")  # the person's last look (kx brief) and the notices sent from here (kx.notify)
 # where the id of a row of each entity table appears (Store._rename): plain columns, and JSON lists of ids
 REFS = {"runs": (("runs", "parent"), ("scores", "run_id"), ("notes", "run_id"), ("tags", "run_id"),
                  ("artifacts", "run_id"), ("submissions", "run_id"), ("pushes", "run_id")),
